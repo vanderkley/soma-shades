@@ -1,0 +1,136 @@
+import asyncio
+import json
+from typing import Any
+
+import aiomqtt
+
+from soma_shades.ble.client import ShadeClient
+from soma_shades.ble.protocol import BATTERY_LEVEL_CHAR, MOTOR_CHAR, MOVE_PERCENT_CHAR, MotorCommand
+from soma_shades.mqtt.bridge import MQTTBridge
+from soma_shades.mqtt.topics import BRIDGE_AVAILABILITY_TOPIC, shade_topic
+from tests.conftest import FakeBluetooth, mqtt_client, wait_until
+
+AVAILABILITY = shade_topic("living_room", "availability")
+STATE = shade_topic("living_room", "state")
+
+
+def message(topic: str, payload: str) -> aiomqtt.Message:
+    return aiomqtt.Message(topic, payload.encode(), qos=0, retain=False, mid=0, properties=None)
+
+
+async def start(bridge: MQTTBridge) -> None:
+    bridge.spawn(bridge.publish_state_updates(), name="publish_state_updates")
+    bridge.start_shade_connections()
+    await wait_until(lambda: mqtt_client(bridge).payloads(AVAILABILITY) == ["online"])
+
+
+async def test_discovery_message(bridge: MQTTBridge, shade: ShadeClient) -> None:
+    await bridge.publish_config(shade)
+
+    topic, payload, retain = mqtt_client(bridge).published[-1]
+    config: dict[str, Any] = json.loads(payload)
+    assert topic == shade_topic("living_room", "config")
+    assert retain
+    assert config["unique_id"] == "living_room"
+    assert config["name"] is None
+    assert config["device"]["name"] == "Living Room"
+    assert config["device"]["identifiers"] == [shade.mac]  # the serial number is not known yet
+    assert config["availability_mode"] == "all"
+    assert {"topic": BRIDGE_AVAILABILITY_TOPIC} in config["availability"]
+
+
+async def test_connects_and_publishes_the_state(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+
+    await wait_until(lambda: mqtt_client(bridge).payloads(STATE) == ["closed"])
+    assert all(retain for *_, retain in mqtt_client(bridge).published)
+    assert len(bluetooth.clients) == 1
+
+
+async def test_short_connection_drop_is_not_reported(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+
+    bluetooth.client.drop()
+    await wait_until(lambda: len(bluetooth.clients) == 2)
+    await asyncio.sleep(bridge.config.offline_grace_period * 1.5)
+
+    assert mqtt_client(bridge).payloads(AVAILABILITY) == ["online"]
+
+
+async def test_lost_shade_is_reported_offline_after_the_grace_period(
+    bridge: MQTTBridge, bluetooth: FakeBluetooth
+) -> None:
+    await start(bridge)
+
+    bluetooth.fail = True
+    bluetooth.client.drop()
+    await asyncio.sleep(bridge.config.offline_grace_period / 2)
+    assert mqtt_client(bridge).payloads(AVAILABILITY) == ["online"]
+    await wait_until(lambda: mqtt_client(bridge).payloads(AVAILABILITY) == ["online", "offline"])
+
+    bluetooth.fail = False
+    await wait_until(lambda: mqtt_client(bridge).payloads(AVAILABILITY) == ["online", "offline", "online"])
+
+
+async def test_stuck_connection_attempt_is_reported_offline(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    bluetooth.hang = True
+    bridge.start_shade_connections()
+    await wait_until(lambda: mqtt_client(bridge).payloads(AVAILABILITY) == ["offline"])
+
+
+async def test_keepalive(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+    reads = bluetooth.client.reads.count(BATTERY_LEVEL_CHAR)
+    await wait_until(lambda: bluetooth.client.reads.count(BATTERY_LEVEL_CHAR) >= reads + 2)
+
+
+async def test_commands(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+
+    await bridge.handle_message(message(shade_topic("living_room", "set_position"), "40"))
+    await bridge.handle_message(message(shade_topic("living_room", "set"), "OPEN"))
+
+    assert bluetooth.client.writes == [(MOVE_PERCENT_CHAR, bytes([40])), (MOTOR_CHAR, bytes([MotorCommand.UP]))]
+    await wait_until(lambda: mqtt_client(bridge).payloads(STATE)[-1] == "opening")
+
+
+async def test_command_reconnects_a_lost_shade(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+    bridge.config.reconnect_backoff_min = 60  # the connection task waits, the command has to reconnect
+    bluetooth.client.drop()
+
+    await bridge.handle_message(message(shade_topic("living_room", "set"), "close"))
+
+    assert bluetooth.client.writes == [(MOTOR_CHAR, bytes([MotorCommand.DOWN]))]
+
+
+async def test_invalid_messages_are_ignored(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+
+    await bridge.handle_message(message(shade_topic("living_room", "set"), "sideways"))
+    await bridge.handle_message(message(shade_topic("living_room", "set_position"), "half"))
+    await bridge.handle_message(message(shade_topic("unknown", "set"), "open"))
+    await bridge.handle_message(message("homeassistant/status", "rebooting"))
+
+    assert bluetooth.client.writes == []
+
+
+async def test_home_assistant_online_republishes_everything(bridge: MQTTBridge) -> None:
+    await start(bridge)
+    mqtt_client(bridge).published.clear()
+
+    await bridge.handle_message(message("homeassistant/status", "online"))
+
+    topics = {topic for topic, *_ in mqtt_client(bridge).published}
+    assert topics == {shade_topic("living_room", end) for end in ("config", "availability", "state", "position")}
+
+
+async def test_shutdown_reports_everything_offline(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+
+    await bridge.shutdown()
+
+    assert mqtt_client(bridge).payloads(AVAILABILITY)[-1] == "offline"
+    assert mqtt_client(bridge).payloads(BRIDGE_AVAILABILITY_TOPIC) == ["offline"]
+    assert not bluetooth.client.is_connected
+    assert not bridge.tasks

@@ -1,0 +1,37 @@
+[Unit]
+Description=Soma Smart Shades MQTT bridge for Home Assistant
+Documentation=https://github.com/vanderkley/soma-shades
+Wants=network-online.target bluetooth.service
+After=network-online.target bluetooth.service
+# keep restarting, the bridge reconnects to the broker and the shades by itself
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# the user that installed soma-shades with: uv tool install soma-shades
+User=pi
+Group=pi
+
+# override with: sudo systemctl edit soma-bridge.service
+Environment=SOMA_BROKER=localhost
+Environment=PYTHONUNBUFFERED=1
+
+# the shades cache in /var/lib/soma-shades
+StateDirectory=soma-shades
+ExecStart=/home/pi/.local/bin/soma bridge --cache-file ${STATE_DIRECTORY}/shades.json
+
+Restart=always
+RestartSec=10
+# the bridge publishes the shades offline and disconnects them one by one (max 15 seconds each)
+TimeoutStopSec=90
+
+# hardening, BlueZ is reached over D-Bus
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

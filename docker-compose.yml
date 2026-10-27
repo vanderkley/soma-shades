@@ -1,0 +1,25 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+
+  soma-bridge:
+    image: ghcr.io/vanderkley/soma-shades:latest
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      SOMA_BROKER: mosquitto
+    volumes:
+      # bleak uses the BlueZ daemon of the host, the host needs a Bluetooth adapter within range of the shades
+      - /run/dbus:/run/dbus:ro
+      - soma-data:/data
+
+volumes:
+  mosquitto-data:
+  soma-data:
