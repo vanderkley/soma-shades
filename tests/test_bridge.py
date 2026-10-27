@@ -34,9 +34,19 @@ async def test_discovery_message(bridge: MQTTBridge, shade: ShadeClient) -> None
     assert config["unique_id"] == "living_room"
     assert config["name"] is None
     assert config["device"]["name"] == "Living Room"
-    assert config["device"]["identifiers"] == [shade.mac]  # the serial number is not known yet
+    assert config["device"]["identifiers"] == [shade.mac]
     assert config["availability_mode"] == "all"
     assert {"topic": BRIDGE_AVAILABILITY_TOPIC} in config["availability"]
+
+
+async def test_shades_with_the_same_serial_number_are_separate_devices(bridge: MQTTBridge) -> None:
+    # the shades report a firmware build string as serial number, which is the same on every shade
+    serial_number = "R-0103-kristjan-202303241235-5c2281a-6.1"
+    for mac, name in [("AA:BB:CC:DD:EE:01", "Kitchen Door"), ("AA:BB:CC:DD:EE:02", "Kitchen Window")]:
+        await bridge.publish_config(ShadeClient(mac=mac, name=name, serial_number=serial_number))
+
+    devices = [json.loads(payload)["device"] for _, payload, _ in mqtt_client(bridge).published]
+    assert [device["identifiers"] for device in devices] == [["AA:BB:CC:DD:EE:01"], ["AA:BB:CC:DD:EE:02"]]
 
 
 async def test_connects_and_publishes_the_state(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:

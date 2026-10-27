@@ -376,7 +376,8 @@ class MQTTBridge:
             "device": {
                 "name": shade.display_name,
                 "model": "Smart Shades",
-                "identifiers": [shade.serial_number or shade.mac],
+                # the serial number is a firmware build string, the same on every shade, so it is not an identifier
+                "identifiers": [shade.mac],
                 "connections": [["mac", shade.mac]],
                 "manufacturer": shade.manufacturer,
                 "hw_version": shade.hardware_version,

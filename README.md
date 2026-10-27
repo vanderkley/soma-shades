@@ -8,11 +8,12 @@
 Control [Soma Smart Shades](https://www.somasmarthome.com/) over Bluetooth LE, without the SOMA Connect hub, and
 add them to Home Assistant through MQTT.
 
-```mermaid
-flowchart LR
-    shades["Soma Smart Shades"] <-- "Bluetooth LE" --> bridge["soma bridge<br/>connection per shade<br/>keepalive + reconnect"]
-    bridge <-- "MQTT" --> broker[("Mosquitto")]
-    broker <-- "MQTT" --> ha["Home Assistant"]
+```
+┌──────────────┐               ┌──────────────────────┐          ┌───────────┐          ┌────────────────┐
+│ Soma Smart   │ Bluetooth LE  │ soma bridge          │   MQTT   │ Mosquitto │   MQTT   │ Home Assistant │
+│ Shades       │◄─────────────►│ connection per shade │◄────────►│ broker    │◄────────►│                │
+│              │               │ keepalive, reconnect │          │           │          │                │
+└──────────────┘               └──────────────────────┘          └───────────┘          └────────────────┘
 ```
 
 - **`soma` command line tool**: discover the shades, move them, read the position and battery level.
