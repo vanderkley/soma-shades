@@ -321,7 +321,7 @@ class ShadeClient:
         """Move to a position from 0 (open) to 100 (closed)."""
         try:
             target_value = int(target)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             raise InvalidValueError(f"The {self.name!r} position value {target!r} is invalid") from None
         if not 0 <= target_value <= 100:
             raise InvalidValueError(f"The {self.name!r} position value is outside the range of 0 to 100")
@@ -389,7 +389,7 @@ class ShadeClient:
     async def set_motor_speed(self, speed: int | str) -> None:
         try:
             speed_value = int(speed)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             raise InvalidValueError(f"The {self.name!r} motor speed value {speed!r} is invalid") from None
         if not 0 <= speed_value <= 100:
             raise InvalidValueError(f"The {self.name!r} motor speed value is outside the range of 0 to 100")

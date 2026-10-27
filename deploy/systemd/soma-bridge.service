@@ -8,7 +8,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-# the user that installed soma-shades with: uv tool install soma-shades
+# the user that installed soma-shades with: pipx install soma-shades
 User=pi
 Group=pi
 

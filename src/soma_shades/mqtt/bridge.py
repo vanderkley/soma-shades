@@ -5,7 +5,7 @@ import logging
 import signal
 import time
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any
+from typing import Any, TypeVar
 
 import aiomqtt
 from prettytable import PrettyTable
@@ -28,6 +28,8 @@ from soma_shades.mqtt.topics import (
 )
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class MQTTBridge:
@@ -238,7 +240,9 @@ class MQTTBridge:
         """
         while True:
             try:
-                await asyncio.wait_for(shade.wait_until_disconnected(), timeout=self.config.keepalive_interval)
+                # asyncio.timeout instead of wait_for, which can swallow a cancellation on Python 3.11
+                async with asyncio.timeout(self.config.keepalive_interval):
+                    await shade.wait_until_disconnected()
                 return
             except TimeoutError:
                 pass
@@ -396,7 +400,7 @@ class MQTTBridge:
                 logger.error(f"Periodic task {func.__name__!r} failed: {err!r}")
             await asyncio.sleep(interval)
 
-    def spawn[T](self, coro: Coroutine[Any, Any, T], name: str) -> asyncio.Task[T]:
+    def spawn(self, coro: Coroutine[Any, Any, T], name: str) -> asyncio.Task[T]:
         """Run a coroutine in a background task, keeping a reference so it is not garbage collected."""
         task = asyncio.create_task(coro, name=name)
         self.tasks.add(task)
@@ -418,7 +422,8 @@ class MQTTBridge:
         for shade in self.fleet.shades:
             await self.publish_availability(shade, CoverAvailability.OFFLINE)
             try:
-                await asyncio.wait_for(shade.disconnect(), timeout=self.config.connect_timeout)
+                async with asyncio.timeout(self.config.connect_timeout):
+                    await shade.disconnect()
             except Exception as err:
                 logger.warning(f"Cannot disconnect from {shade.name!r}: {err!r}")
 

@@ -19,6 +19,7 @@ First public release.
 - MQTT username and password, and environment variables for all bridge options.
 - Docker image, Docker Compose file with Mosquitto, and a systemd unit.
 - Python API: `ShadeClient` and `ShadeFleet`, with type hints.
+- Python 3.11 and newer, so it runs on the Python of Raspberry Pi OS.
 
 ### Known limitations
 - Only the Smart Shades 2 (V2 protocol) are supported. The Smart Shades 3 (V3 protocol) are recognized during the
