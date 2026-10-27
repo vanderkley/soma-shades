@@ -310,7 +310,7 @@ pre-commit install
 | Lint       | `ruff check . && ruff format --check .`                     |
 | Type check | `mypy`                                                      |
 
-To release, update the version in `pyproject.toml` and the [changelog](CHANGELOG.md), and push a tag like `v1.0.0`.
+To release, update the version in `pyproject.toml` and the [changelog](https://github.com/vanderkley/soma-shades/blob/main/CHANGELOG.md), and push a tag like `v1.0.0`.
 The release workflow publishes the package to PyPI and the Docker image to `ghcr.io`.
 
 ## Credits
