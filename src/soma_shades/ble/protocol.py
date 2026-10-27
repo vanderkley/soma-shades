@@ -26,11 +26,23 @@ CALIBRATE_CHAR = uuid.UUID("00001529-b87f-490c-92cb-11ba5ea5167c")
 CHARGING_CHAR = uuid.UUID("00001894-b87f-490c-92cb-11ba5ea5167c")
 CONFIG_CHAR = uuid.UUID("00001896-b87f-490c-92cb-11ba5ea5167c")
 BATTERY_LEVEL_CHAR = uuid.UUID("00002a19-0000-1000-8000-00805f9b34fb")
+BATTERY_VOLTAGE_CHAR = uuid.UUID("0000ba71-b87f-490c-92cb-11ba5ea5167c")  # battery voltage in mV / 10
+TIME_CHAR = uuid.UUID("00001555-b87f-490c-92cb-11ba5ea5167c")  # UNIX timestamp, writable
 FIRMWARE_VERSION_CHAR = uuid.UUID("00002a26-0000-1000-8000-00805f9b34fb")
 HARDWARE_VERSION_CHAR = uuid.UUID("00002a27-0000-1000-8000-00805f9b34fb")
 SOFTWARE_VERSION_CHAR = uuid.UUID("00002a28-0000-1000-8000-00805f9b34fb")
 
 LIGHT_COEFF_TO_LUX = 10
+
+# the battery voltage range of the Soma app: empty at 3.6 V, full at 4.1 V
+BATTERY_EMPTY_VOLTAGE = 3600
+BATTERY_FULL_VOLTAGE = 4100
+
+
+def battery_level_from_voltage(voltage: int) -> int:
+    """Convert the battery voltage in mV to a battery level from 0 to 100 percent."""
+    level = (voltage - BATTERY_EMPTY_VOLTAGE) * 100 // (BATTERY_FULL_VOLTAGE - BATTERY_EMPTY_VOLTAGE)
+    return max(0, min(100, level))
 
 
 class SoundCommand(IntEnum):

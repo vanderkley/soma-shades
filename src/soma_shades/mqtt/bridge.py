@@ -5,7 +5,7 @@ import logging
 import signal
 import time
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import aiomqtt
 from prettytable import PrettyTable
@@ -24,12 +24,31 @@ from soma_shades.mqtt.topics import (
     CoverSet,
     CoverState,
     HomeAssistantStatus,
+    button_config_topic,
+    sensor_config_topic,
     shade_topic,
 )
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+class Sensor(NamedTuple):
+    """A Home Assistant sensor of a shade, its state is published to the shade topic `key`."""
+
+    key: str
+    name: str
+    device_class: str
+    unit: str
+    value: Callable[[ShadeClient], int | None]
+
+
+SENSORS = [
+    Sensor("battery", "Battery", "battery", "%", lambda shade: shade.battery_level),
+    Sensor("battery_voltage", "Battery voltage", "voltage", "mV", lambda shade: shade.battery_voltage),
+    Sensor("solar_panel", "Solar panel", "voltage", "mV", lambda shade: shade.solar_panel_voltage),
+]
 
 
 class MQTTBridge:
@@ -155,6 +174,8 @@ class MQTTBridge:
         elif end_of_topic == "set_position":
             target_position = int(payload)
             await self.control_shade(device_name, lambda shade: shade.set_position(target_position))
+        elif end_of_topic == "sync_time":
+            await self.control_shade(device_name, ShadeClient.sync_time)
 
     async def discover_shades(self, scan_for: float) -> None:
         """Discover shades via Bluetooth and keep a connection with each of them."""
@@ -227,6 +248,7 @@ class MQTTBridge:
             # without notifications the state would go stale, so start over on the next attempt
             await shade.disconnect()
             raise
+        await self.read_diagnostics(shade)
 
         if timer := self.offline_timers.pop(shade.name, None):
             timer.cancel()
@@ -288,8 +310,17 @@ class MQTTBridge:
                 async with shade.lock:
                     await shade.get_position()
                     await shade.get_battery_level()
+                    await self.read_diagnostics(shade)
             except Exception as err:
                 logger.error(f"Periodic update of {shade.name!r} failed: {err!r}")
+
+    async def read_diagnostics(self, shade: ShadeClient) -> None:
+        """Read the battery voltage and the solar panel voltage, which not every firmware may support."""
+        for read in (shade.get_battery_voltage, shade.get_light_and_panel):
+            try:
+                await read()
+            except Exception as err:
+                logger.warning(f"Cannot read {read.__name__!r} of {shade.name!r}: {err!r}")
 
     def log_status_table(self) -> None:
         """Log a table with the availability and state of the shades."""
@@ -350,14 +381,35 @@ class MQTTBridge:
             await self.publish_state(shade)
 
     async def publish_state(self, shade: ShadeClient) -> None:
-        logger.info(f"Publishing {shade.name!r} state {shade.cover_status} at position {shade.position}%")
+        logger.info(
+            f"Publishing {shade.name!r} state {shade.cover_status} at position {shade.position}%, "
+            f"battery {shade.battery_level}%"
+        )
         state = CoverState(shade.cover_status) if shade.cover_status else "unknown"
         await self.publish(shade_topic(shade.name, "state"), state)
         await self.publish(shade_topic(shade.name, "position"), shade.position)
+        for sensor in SENSORS:
+            if (value := sensor.value(shade)) is not None:
+                await self.publish(shade_topic(shade.name, sensor.key), value)
 
     async def publish_config(self, shade: ShadeClient) -> None:
-        """Publish the Home Assistant MQTT discovery message of a shade, which creates the cover in Home Assistant."""
-        discovery_message = {
+        """Publish the Home Assistant MQTT discovery messages of a shade, which create its cover, sensors and button."""
+        # the entities are available when both the bridge and the shade are "online"
+        availability = [
+            {"topic": shade_topic(shade.name, "availability")},
+            {"topic": BRIDGE_AVAILABILITY_TOPIC},
+        ]
+        device = {
+            "name": shade.display_name,
+            "model": "Smart Shades",
+            # the serial number is a firmware build string, the same on every shade, so it is not an identifier
+            "identifiers": [shade.mac],
+            "connections": [["mac", shade.mac]],
+            "manufacturer": shade.manufacturer,
+            "hw_version": shade.hardware_version,
+            "sw_version": shade.software_version,
+        }
+        cover_discovery_message = {
             "~": f"{SMARTSHADE_TOPIC}/{shade.name}",
             "name": None,  # the cover has the name of the device
             "unique_id": shade.name,
@@ -365,27 +417,42 @@ class MQTTBridge:
             "state_topic": "~/state",
             "set_position_topic": "~/set_position",
             "position_topic": "~/position",
-            # the cover is available when both the bridge and the shade are "online"
-            "availability": [
-                {"topic": shade_topic(shade.name, "availability")},
-                {"topic": BRIDGE_AVAILABILITY_TOPIC},
-            ],
+            "availability": availability,
             "availability_mode": "all",
             "position_open": 0,
             "position_closed": 100,
-            "device": {
-                "name": shade.display_name,
-                "model": "Smart Shades",
-                # the serial number is a firmware build string, the same on every shade, so it is not an identifier
-                "identifiers": [shade.mac],
-                "connections": [["mac", shade.mac]],
-                "manufacturer": shade.manufacturer,
-                "hw_version": shade.hardware_version,
-                "sw_version": shade.software_version,
-            },
+            "device": device,
         }
-        logger.debug(f"Publishing {shade.name!r} discovery message")
-        await self.publish(shade_topic(shade.name, "config"), json.dumps(discovery_message))
+        logger.debug(f"Publishing {shade.name!r} discovery messages")
+        await self.publish(shade_topic(shade.name, "config"), json.dumps(cover_discovery_message))
+
+        for sensor in SENSORS:
+            sensor_discovery_message = {
+                "name": sensor.name,
+                "unique_id": f"{shade.name}_{sensor.key}",
+                "state_topic": shade_topic(shade.name, sensor.key),
+                "device_class": sensor.device_class,
+                "state_class": "measurement",
+                "unit_of_measurement": sensor.unit,
+                "entity_category": "diagnostic",
+                "availability": availability,
+                "availability_mode": "all",
+                "device": device,
+            }
+            await self.publish(sensor_config_topic(shade.name, sensor.key), json.dumps(sensor_discovery_message))
+
+        # sets the clock of the shade, which drifts fast, for the schedules of the Soma app
+        sync_time_discovery_message = {
+            "name": "Sync time",
+            "unique_id": f"{shade.name}_sync_time",
+            "command_topic": shade_topic(shade.name, "sync_time"),
+            "entity_category": "config",
+            "icon": "mdi:clock-check-outline",
+            "availability": availability,
+            "availability_mode": "all",
+            "device": device,
+        }
+        await self.publish(button_config_topic(shade.name, "sync_time"), json.dumps(sync_time_discovery_message))
 
     async def run_periodically(
         self, func: Callable[[], Awaitable[None] | None], interval: float, startup_delay: float = 0

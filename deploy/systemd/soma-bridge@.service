@@ -1,5 +1,5 @@
 [Unit]
-Description=Soma Smart Shades MQTT bridge for Home Assistant
+Description=Soma Smart Shades MQTT bridge for Home Assistant, as user %i
 Documentation=https://github.com/vanderkley/soma-shades
 Wants=network-online.target bluetooth.service
 After=network-online.target bluetooth.service
@@ -8,17 +8,18 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-# the user that installed soma-shades with: pipx install soma-shades
-User=pi
-Group=pi
+# a template unit, the instance is the user that installed soma-shades with pipx:
+#   sudo systemctl enable --now soma-bridge@$USER
+User=%i
+Group=%i
 
-# override with: sudo systemctl edit soma-bridge.service
+# override with: sudo systemctl edit soma-bridge@$USER
 Environment=SOMA_BROKER=localhost
 Environment=PYTHONUNBUFFERED=1
 
 # the shades cache in /var/lib/soma-shades
 StateDirectory=soma-shades
-ExecStart=/home/pi/.local/bin/soma bridge --cache-file ${STATE_DIRECTORY}/shades.json
+ExecStart=/home/%i/.local/bin/soma bridge --cache-file ${STATE_DIRECTORY}/shades.json
 
 Restart=always
 RestartSec=10

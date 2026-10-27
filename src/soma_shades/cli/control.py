@@ -16,10 +16,12 @@ ACTIONS: dict[str, Callable[[ShadeClient, str], Awaitable[Any]]] = {
     "position": lambda shade, _: shade.get_position(),
     "info": lambda shade, _: shade.get_info(),
     "battery": lambda shade, _: shade.get_battery_level(),
+    "battery_voltage": lambda shade, _: shade.get_battery_voltage(),
     "solar_panel": lambda shade, _: shade.get_light_and_panel(),
     "motor_speed": lambda shade, _: shade.get_motor_speed(),
     "set_motor_speed": lambda shade, value: shade.set_motor_speed(value),
     "beep": lambda shade, _: shade.identify(),
+    "sync_time": lambda shade, _: shade.sync_time(),
 }
 VALUE_ACTIONS = {"set_position", "set_motor_speed"}
 

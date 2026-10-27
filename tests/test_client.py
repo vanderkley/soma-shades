@@ -1,7 +1,15 @@
 import pytest
 
 from soma_shades.ble.client import ShadeClient
-from soma_shades.ble.protocol import MOTOR_CHAR, MOVE_PERCENT_CHAR, NOTIFY_CHAR, POSITION_CHAR, MotorCommand
+from soma_shades.ble.protocol import (
+    BATTERY_LEVEL_CHAR,
+    BATTERY_VOLTAGE_CHAR,
+    MOTOR_CHAR,
+    MOVE_PERCENT_CHAR,
+    NOTIFY_CHAR,
+    POSITION_CHAR,
+    MotorCommand,
+)
 from soma_shades.exceptions import InvalidValueError, ShadeConnectionError, ShadeNotConnectedError
 from tests.conftest import FakeBluetooth
 
@@ -101,6 +109,27 @@ async def test_position_notification(shade: ShadeClient, bluetooth: FakeBluetoot
     assert shade.position == 30
     assert shade.cover_status == "stopped"
     assert updates == [30]
+
+
+async def test_battery_level_change_notifies_an_update(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    updates: list[int | None] = []
+    shade.on_update = lambda: updates.append(shade.battery_level)
+    await shade.connect(timeout=1)
+
+    await shade.get_battery_level()
+    await shade.keepalive()  # the same level, no update
+    bluetooth.values[BATTERY_LEVEL_CHAR] = bytes([89])
+    await shade.keepalive()
+
+    assert updates == [90, 89]
+
+
+async def test_battery_voltage(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    bluetooth.values[BATTERY_VOLTAGE_CHAR] = (412).to_bytes(2, "little")
+    await shade.connect(timeout=1)
+
+    assert await shade.get_battery_voltage() == 4120
+    assert shade.battery_voltage == 4120
 
 
 async def test_identify_plays_a_sound(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:

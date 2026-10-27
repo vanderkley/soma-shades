@@ -3,6 +3,7 @@ import pytest
 from soma_shades.ble.protocol import (
     MANUFACTURER_ID,
     ConfigCommand,
+    battery_level_from_voltage,
     is_v3_shade,
     parse_config_notification,
     parse_device_name,
@@ -54,3 +55,8 @@ def test_parse_config_notification() -> None:
 
 def test_parse_truncated_config_notification() -> None:
     assert parse_config_notification(bytes([0x00, 0x00, ConfigCommand.MOTOR_SPEED])) == {}
+
+
+@pytest.mark.parametrize(("voltage", "level"), [(3500, 0), (3600, 0), (3850, 50), (4100, 100), (4200, 100)])
+def test_battery_level_from_voltage(voltage: int, level: int) -> None:
+    assert battery_level_from_voltage(voltage) == level

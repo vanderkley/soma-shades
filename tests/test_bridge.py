@@ -1,17 +1,33 @@
 import asyncio
 import json
+import time
+from datetime import datetime
 from typing import Any
 
 import aiomqtt
 
 from soma_shades.ble.client import ShadeClient
-from soma_shades.ble.protocol import BATTERY_LEVEL_CHAR, MOTOR_CHAR, MOVE_PERCENT_CHAR, MotorCommand
+from soma_shades.ble.protocol import (
+    BATTERY_LEVEL_CHAR,
+    BATTERY_VOLTAGE_CHAR,
+    CHARGING_CHAR,
+    MOTOR_CHAR,
+    MOVE_PERCENT_CHAR,
+    TIME_CHAR,
+    MotorCommand,
+)
 from soma_shades.mqtt.bridge import MQTTBridge
-from soma_shades.mqtt.topics import BRIDGE_AVAILABILITY_TOPIC, shade_topic
+from soma_shades.mqtt.topics import (
+    BRIDGE_AVAILABILITY_TOPIC,
+    button_config_topic,
+    sensor_config_topic,
+    shade_topic,
+)
 from tests.conftest import FakeBluetooth, mqtt_client, wait_until
 
 AVAILABILITY = shade_topic("living_room", "availability")
 STATE = shade_topic("living_room", "state")
+BATTERY = shade_topic("living_room", "battery")
 
 
 def message(topic: str, payload: str) -> aiomqtt.Message:
@@ -27,7 +43,7 @@ async def start(bridge: MQTTBridge) -> None:
 async def test_discovery_message(bridge: MQTTBridge, shade: ShadeClient) -> None:
     await bridge.publish_config(shade)
 
-    topic, payload, retain = mqtt_client(bridge).published[-1]
+    topic, payload, retain = mqtt_client(bridge).published[0]
     config: dict[str, Any] = json.loads(payload)
     assert topic == shade_topic("living_room", "config")
     assert retain
@@ -39,20 +55,59 @@ async def test_discovery_message(bridge: MQTTBridge, shade: ShadeClient) -> None
     assert {"topic": BRIDGE_AVAILABILITY_TOPIC} in config["availability"]
 
 
+async def test_sensor_discovery_messages(bridge: MQTTBridge, shade: ShadeClient) -> None:
+    await bridge.publish_config(shade)
+
+    client = mqtt_client(bridge)
+    cover_device = json.loads(client.payloads(shade_topic("living_room", "config"))[0])["device"]
+    for sensor, device_class, unit in [
+        ("battery", "battery", "%"),
+        ("battery_voltage", "voltage", "mV"),
+        ("solar_panel", "voltage", "mV"),
+    ]:
+        topic = sensor_config_topic("living_room", sensor)
+        assert topic == f"homeassistant/sensor/smartshade/living_room_{sensor}/config"
+        config: dict[str, Any] = json.loads(client.payloads(topic)[0])
+        assert config["unique_id"] == f"living_room_{sensor}"
+        assert config["state_topic"] == shade_topic("living_room", sensor)
+        assert config["device_class"] == device_class
+        assert config["unit_of_measurement"] == unit
+        assert config["device"] == cover_device  # the same device as the cover
+        assert {"topic": BRIDGE_AVAILABILITY_TOPIC} in config["availability"]
+
+
+async def test_sync_time_button_discovery_message(bridge: MQTTBridge, shade: ShadeClient) -> None:
+    await bridge.publish_config(shade)
+
+    topic = button_config_topic("living_room", "sync_time")
+    assert topic == "homeassistant/button/smartshade/living_room_sync_time/config"
+    config: dict[str, Any] = json.loads(mqtt_client(bridge).payloads(topic)[0])
+    assert config["unique_id"] == "living_room_sync_time"
+    assert config["command_topic"] == shade_topic("living_room", "sync_time")
+
+
 async def test_shades_with_the_same_serial_number_are_separate_devices(bridge: MQTTBridge) -> None:
     # the shades report a firmware build string as serial number, which is the same on every shade
     serial_number = "R-0103-kristjan-202303241235-5c2281a-6.1"
     for mac, name in [("AA:BB:CC:DD:EE:01", "Kitchen Door"), ("AA:BB:CC:DD:EE:02", "Kitchen Window")]:
         await bridge.publish_config(ShadeClient(mac=mac, name=name, serial_number=serial_number))
 
-    devices = [json.loads(payload)["device"] for _, payload, _ in mqtt_client(bridge).published]
+    devices = [
+        json.loads(payload)["device"]
+        for name in ("kitchen_door", "kitchen_window")
+        for payload in mqtt_client(bridge).payloads(shade_topic(name, "config"))
+    ]
     assert [device["identifiers"] for device in devices] == [["AA:BB:CC:DD:EE:01"], ["AA:BB:CC:DD:EE:02"]]
 
 
 async def test_connects_and_publishes_the_state(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
     await start(bridge)
 
-    await wait_until(lambda: mqtt_client(bridge).payloads(STATE) == ["closed"])
+    # the state is published again on every update, e.g. of the battery level
+    await wait_until(lambda: set(mqtt_client(bridge).payloads(STATE)) == {"closed"})
+    assert set(mqtt_client(bridge).payloads(BATTERY)) == {90}
+    assert mqtt_client(bridge).payloads(shade_topic("living_room", "battery_voltage"))[-1] == 3950
+    assert mqtt_client(bridge).payloads(shade_topic("living_room", "solar_panel"))[-1] == 5200
     assert all(retain for *_, retain in mqtt_client(bridge).published)
     assert len(bluetooth.clients) == 1
 
@@ -94,6 +149,39 @@ async def test_keepalive(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
     await wait_until(lambda: bluetooth.client.reads.count(BATTERY_LEVEL_CHAR) >= reads + 2)
 
 
+async def test_missing_diagnostics_do_not_break_the_connection(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    bluetooth.missing = {BATTERY_VOLTAGE_CHAR, CHARGING_CHAR}
+
+    await start(bridge)
+
+    assert mqtt_client(bridge).payloads(shade_topic("living_room", "battery_voltage")) == []
+    assert len(bluetooth.clients) == 1
+
+
+async def test_sync_time_command(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+
+    utc_offset = datetime.now().astimezone().utcoffset()
+    assert utc_offset is not None
+    before = time.time()
+    await bridge.handle_message(message(shade_topic("living_room", "sync_time"), "PRESS"))
+
+    [(char, data)] = bluetooth.client.writes
+    assert char == TIME_CHAR
+    # the clock of the shade is in local time
+    local_time = int.from_bytes(data, "little") - utc_offset.total_seconds()
+    assert int(before) <= local_time <= time.time()
+
+
+async def test_battery_level_change_is_published(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+    await wait_until(lambda: mqtt_client(bridge).payloads(BATTERY)[-1:] == [90])
+
+    bluetooth.values[BATTERY_LEVEL_CHAR] = bytes([89])  # read by the next keepalive
+
+    await wait_until(lambda: mqtt_client(bridge).payloads(BATTERY)[-1:] == [89])
+
+
 async def test_commands(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
     await start(bridge)
 
@@ -132,7 +220,11 @@ async def test_home_assistant_online_republishes_everything(bridge: MQTTBridge) 
     await bridge.handle_message(message("homeassistant/status", "online"))
 
     topics = {topic for topic, *_ in mqtt_client(bridge).published}
-    assert topics == {shade_topic("living_room", end) for end in ("config", "availability", "state", "position")}
+    sensors = ("battery", "battery_voltage", "solar_panel")
+    ends = ("config", "availability", "state", "position", *sensors)
+    configs = {sensor_config_topic("living_room", sensor) for sensor in sensors}
+    configs.add(button_config_topic("living_room", "sync_time"))
+    assert topics == {shade_topic("living_room", end) for end in ends} | configs
 
 
 async def test_shutdown_reports_everything_offline(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:

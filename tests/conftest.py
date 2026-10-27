@@ -6,12 +6,19 @@ from typing import Any, cast
 
 import pytest
 from bleak.backends.device import BLEDevice
+from bleak.exc import BleakError
 from bleak_retry_connector import BleakNotFoundError
 
 import soma_shades.ble.client as client_module
 from soma_shades.ble.client import ShadeClient
 from soma_shades.ble.fleet import ShadeFleet
-from soma_shades.ble.protocol import BATTERY_LEVEL_CHAR, MOVE_PERCENT_CHAR, POSITION_CHAR
+from soma_shades.ble.protocol import (
+    BATTERY_LEVEL_CHAR,
+    BATTERY_VOLTAGE_CHAR,
+    CHARGING_CHAR,
+    MOVE_PERCENT_CHAR,
+    POSITION_CHAR,
+)
 from soma_shades.mqtt.bridge import MQTTBridge
 from soma_shades.mqtt.config import BridgeConfig
 
@@ -19,9 +26,12 @@ from soma_shades.mqtt.config import BridgeConfig
 class FakeBleakClient:
     """A connected BleakClient of a shade."""
 
-    def __init__(self, disconnected_callback: Callable[[Any], None], values: dict[uuid.UUID, bytes]):
+    def __init__(
+        self, disconnected_callback: Callable[[Any], None], values: dict[uuid.UUID, bytes], missing: set[uuid.UUID]
+    ):
         self.disconnected_callback = disconnected_callback
         self.values = values
+        self.missing = missing
         self.is_connected = True
         self.services: list[Any] = []
         self.reads: list[uuid.UUID] = []
@@ -30,6 +40,8 @@ class FakeBleakClient:
 
     async def read_gatt_char(self, char: uuid.UUID) -> bytearray:
         self.reads.append(char)
+        if char in self.missing:
+            raise BleakError(f"Characteristic {char} was not found")
         return bytearray(self.values.get(char, b"\x00"))
 
     async def write_gatt_char(self, char: uuid.UUID, data: bytes, response: bool = True) -> None:
@@ -59,7 +71,14 @@ class FakeBluetooth:
         self.clients: list[FakeBleakClient] = []
         self.fail = False  # connection attempts fail
         self.hang = False  # connection attempts never finish
-        self.values = {POSITION_CHAR: b"\x64", MOVE_PERCENT_CHAR: b"\x64", BATTERY_LEVEL_CHAR: b"\x5a"}
+        self.values = {
+            POSITION_CHAR: b"\x64",
+            MOVE_PERCENT_CHAR: b"\x64",
+            BATTERY_LEVEL_CHAR: b"\x5a",  # 90%
+            BATTERY_VOLTAGE_CHAR: (395).to_bytes(2, "little"),  # 3950 mV
+            CHARGING_CHAR: (5200).to_bytes(2, "little") + b"\x00\x00",  # 5200 mV
+        }
+        self.missing: set[uuid.UUID] = set()  # characteristics the firmware does not have
 
     @property
     def client(self) -> FakeBleakClient:
@@ -72,7 +91,7 @@ class FakeBluetooth:
             await asyncio.sleep(3600)
         if self.fail:
             raise BleakNotFoundError(f"{name} not found")
-        client = FakeBleakClient(disconnected_callback, self.values)
+        client = FakeBleakClient(disconnected_callback, self.values, self.missing)
         self.clients.append(client)
         return client
 

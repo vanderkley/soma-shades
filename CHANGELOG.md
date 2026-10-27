@@ -4,6 +4,19 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-28
+
+### Added
+- Sensors for every shade in Home Assistant: the battery level, the battery voltage and the solar panel voltage.
+- A *Sync time* button in Home Assistant and a `sync_time` action of `soma control`, which set the clock of the shade
+  for the schedules of the Soma app.
+- A `battery_voltage` action of `soma control`.
+
+### Changed
+- The systemd unit is a template unit, `soma-bridge@.service`, that runs the bridge as the user of the instance:
+  `systemctl enable --now soma-bridge@$USER`. Raspberry Pi OS has no default `pi` user anymore. Replace an installed
+  `soma-bridge.service` with the new unit.
+
 ## [1.0.1] - 2026-10-28
 
 ### Fixed

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal, Self
 
 from bleak import BleakClient, BleakScanner
@@ -11,6 +11,7 @@ from bleak_retry_connector import BleakNotFoundError, establish_connection
 
 from soma_shades.ble.protocol import (
     BATTERY_LEVEL_CHAR,
+    BATTERY_VOLTAGE_CHAR,
     CHARGING_CHAR,
     CONFIG_CHAR,
     LIGHT_COEFF_TO_LUX,
@@ -18,9 +19,11 @@ from soma_shades.ble.protocol import (
     MOVE_PERCENT_CHAR,
     NOTIFY_CHAR,
     POSITION_CHAR,
+    TIME_CHAR,
     ConfigCommand,
     MotorCommand,
     SoundCommand,
+    battery_level_from_voltage,
     parse_config_notification,
 )
 from soma_shades.exceptions import (
@@ -67,8 +70,10 @@ class ShadeClient:
         self.hardware_version = hardware_version
         self.motor_speed: int | None = None
         self.battery_level: int | None = None
+        self.battery_voltage: int | None = None  # mV
         self.charging_level: int | None = None
         self.solar_panel_level: int | None = None
+        self.solar_panel_voltage: int | None = None  # mV
         self._position: int | None = None
         self._target_position: int | None = None
         self._connected = False
@@ -167,6 +172,14 @@ class ShadeClient:
     def _notify_update(self) -> None:
         if self.on_update:
             self.on_update()
+
+    def _set_battery_level(self, data: bytes | bytearray) -> int:
+        """Store the battery level read from the shade, and notify the update when it changed."""
+        battery_level = int.from_bytes(data, byteorder="little")
+        if battery_level != self.battery_level:
+            self.battery_level = battery_level
+            self._notify_update()
+        return battery_level
 
     async def scan(self, timeout: float) -> BLEDevice:
         """Find the Bluetooth device of the shade."""
@@ -268,7 +281,7 @@ class ShadeClient:
                             self.software_version = value
                 elif description == "battery service":
                     for char in service.characteristics:
-                        self.battery_level = int.from_bytes(await client.read_gatt_char(char), byteorder="little")
+                        self._set_battery_level(await client.read_gatt_char(char))
             except ValueError:
                 continue
 
@@ -279,16 +292,39 @@ class ShadeClient:
         )
 
     async def get_battery_level(self) -> int:
-        response = await self._client.read_gatt_char(BATTERY_LEVEL_CHAR)
-        self.battery_level = int.from_bytes(response, byteorder="little")
-        logger.info(f"Shade {self.name!r} has {self.battery_level}% battery level")
-        return self.battery_level
+        battery_level = self._set_battery_level(await self._client.read_gatt_char(BATTERY_LEVEL_CHAR))
+        logger.info(f"Shade {self.name!r} has {battery_level}% battery level")
+        return battery_level
+
+    async def get_battery_voltage(self) -> int:
+        """Read the battery voltage in mV."""
+        response = await self._client.read_gatt_char(BATTERY_VOLTAGE_CHAR)
+        battery_voltage = int.from_bytes(response[:2], byteorder="little") * 10
+        if battery_voltage != self.battery_voltage:
+            self.battery_voltage = battery_voltage
+            self._notify_update()
+        logger.info(
+            f"Shade {self.name!r} has a battery voltage of {battery_voltage} mV, "
+            f"{battery_level_from_voltage(battery_voltage)}% battery level"
+        )
+        return battery_voltage
+
+    async def sync_time(self) -> None:
+        """Set the clock of the shade to the current local time, which the schedules of the Soma app use.
+
+        The clock counts the seconds since the epoch in local time, not in UTC: shades set by the Soma app in Estonia
+        (UTC+2) were 2 hours ahead of UTC.
+        """
+        now = datetime.now().astimezone()
+        utc_offset = now.utcoffset() or timedelta()
+        local_time = int(now.timestamp() + utc_offset.total_seconds())
+        logger.info(f"Setting the {self.name!r} clock to {now.replace(microsecond=0).isoformat()}")
+        await self._client.write_gatt_char(TIME_CHAR, local_time.to_bytes(4, byteorder="little"), response=True)
 
     async def keepalive(self) -> None:
         """Keep the connection alive, the shade drops a connection after 3 minutes without requests."""
-        response = await self._client.read_gatt_char(BATTERY_LEVEL_CHAR)
-        self.battery_level = int.from_bytes(response, byteorder="little")
-        logger.debug(f"Keepalive {self.name!r}, {self.battery_level}% battery level")
+        battery_level = self._set_battery_level(await self._client.read_gatt_char(BATTERY_LEVEL_CHAR))
+        logger.debug(f"Keepalive {self.name!r}, {battery_level}% battery level")
 
     async def move_up(self) -> None:
         logger.info(f"Moving {self.name!r} up")
@@ -358,8 +394,8 @@ class ShadeClient:
                     logger.info(f"Received a {command.name} config notification for {self.name!r}: {value!r}")
 
         def _battery_handler(_: BleakGATTCharacteristic, data: bytearray) -> None:
-            self.battery_level = int.from_bytes(data, byteorder="little")
-            logger.info(f"Received a battery level notification for {self.name!r}: {self.battery_level}%")
+            battery_level = self._set_battery_level(data)
+            logger.info(f"Received a battery level notification for {self.name!r}: {battery_level}%")
 
         handlers = {"position": _position_handler, "config": _config_handler, "battery_level": _battery_handler}
         await self._client.start_notify(NOTIFICATION_CHARS[notification], handlers[notification])
@@ -400,9 +436,16 @@ class ShadeClient:
         await self._client.write_gatt_char(CONFIG_CHAR, command, response=True)
 
     async def get_light_and_panel(self) -> tuple[int, int]:
-        """Read the light level (lux) and solar panel level."""
+        """Read the light level (lux) and solar panel level.
+
+        According to the protocol documentation, the first two bytes are the solar panel voltage in mV.
+        """
         response = await self._client.read_gatt_char(CHARGING_CHAR)
-        self.charging_level = int.from_bytes(response[:2], byteorder="little") * LIGHT_COEFF_TO_LUX
+        solar_panel_voltage = int.from_bytes(response[:2], byteorder="little")
+        if solar_panel_voltage != self.solar_panel_voltage:
+            self.solar_panel_voltage = solar_panel_voltage
+            self._notify_update()
+        self.charging_level = solar_panel_voltage * LIGHT_COEFF_TO_LUX
         self.solar_panel_level = int.from_bytes(response[2:4], byteorder="little")
         logger.info(
             f"Shade {self.name!r} charging level {self.charging_level} and solar panel level {self.solar_panel_level}"

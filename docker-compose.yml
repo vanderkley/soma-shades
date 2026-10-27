@@ -18,6 +18,8 @@ services:
     volumes:
       # bleak uses the BlueZ daemon of the host, the host needs a Bluetooth adapter within range of the shades
       - /run/dbus:/run/dbus:ro
+      # the timezone of the host, the clock of the shades is set in local time
+      - /etc/localtime:/etc/localtime:ro
       - soma-data:/data
 
 volumes:
