@@ -63,7 +63,8 @@ async def test_sensor_discovery_messages(bridge: MQTTBridge, shade: ShadeClient)
     for sensor, device_class, unit in [
         ("battery", "battery", "%"),
         ("battery_voltage", "voltage", "mV"),
-        ("solar_panel", "voltage", "mV"),
+        ("input_voltage", "voltage", "mV"),
+        ("charging_current", "current", "mA"),
     ]:
         topic = sensor_config_topic("living_room", sensor)
         assert topic == f"homeassistant/sensor/smartshade/living_room_{sensor}/config"
@@ -73,7 +74,16 @@ async def test_sensor_discovery_messages(bridge: MQTTBridge, shade: ShadeClient)
         assert config["device_class"] == device_class
         assert config["unit_of_measurement"] == unit
         assert config["device"] == cover_device  # the same device as the cover
+        # the unit of the charging current is not certain
+        assert config["enabled_by_default"] == (sensor != "charging_current")
         assert {"topic": BRIDGE_AVAILABILITY_TOPIC} in config["availability"]
+
+
+async def test_removed_sensors_are_cleared(bridge: MQTTBridge, shade: ShadeClient) -> None:
+    await bridge.publish_config(shade)
+
+    # an empty retained message removes the sensor of an earlier version from Home Assistant
+    assert mqtt_client(bridge).payloads(sensor_config_topic("living_room", "solar_panel")) == [None]
 
 
 async def test_sync_time_button_discovery_message(bridge: MQTTBridge, shade: ShadeClient) -> None:
@@ -107,7 +117,8 @@ async def test_connects_and_publishes_the_state(bridge: MQTTBridge, bluetooth: F
     await wait_until(lambda: set(mqtt_client(bridge).payloads(STATE)) == {"closed"})
     assert set(mqtt_client(bridge).payloads(BATTERY)) == {90}
     assert mqtt_client(bridge).payloads(shade_topic("living_room", "battery_voltage"))[-1] == 3950
-    assert mqtt_client(bridge).payloads(shade_topic("living_room", "solar_panel"))[-1] == 5200
+    assert mqtt_client(bridge).payloads(shade_topic("living_room", "input_voltage"))[-1] == 605
+    assert mqtt_client(bridge).payloads(shade_topic("living_room", "charging_current"))[-1] == 615
     assert all(retain for *_, retain in mqtt_client(bridge).published)
     assert len(bluetooth.clients) == 1
 
@@ -220,9 +231,9 @@ async def test_home_assistant_online_republishes_everything(bridge: MQTTBridge) 
     await bridge.handle_message(message("homeassistant/status", "online"))
 
     topics = {topic for topic, *_ in mqtt_client(bridge).published}
-    sensors = ("battery", "battery_voltage", "solar_panel")
-    ends = ("config", "availability", "state", "position", *sensors)
-    configs = {sensor_config_topic("living_room", sensor) for sensor in sensors}
+    sensors = ("battery", "battery_voltage", "input_voltage", "charging_current")
+    ends = ("config", "availability", "state", "position", *sensors, "solar_panel")  # solar_panel is cleared
+    configs = {sensor_config_topic("living_room", sensor) for sensor in (*sensors, "solar_panel")}
     configs.add(button_config_topic("living_room", "sync_time"))
     assert topics == {shade_topic("living_room", end) for end in ends} | configs
 

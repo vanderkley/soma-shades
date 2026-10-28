@@ -4,6 +4,19 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- A *Charging current* sensor, disabled by default because the unit (probably mA) is not certain.
+
+### Changed
+- The *Solar panel* sensor is replaced by an *Input voltage* sensor: the value is the voltage of the charging input, of
+  the solar panel or a USB charger, and 0 without a charger. The bridge removes the old sensor from Home Assistant.
+- The `solar_panel` action of `soma control` is renamed to `charging`, and shows the input voltage and charging current.
+
+### Fixed
+- The state log line shows `battery unknown` instead of `battery None%` before the battery level is read.
+
 ## [1.1.0] - 2026-10-28
 
 ### Added

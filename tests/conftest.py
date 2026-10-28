@@ -76,7 +76,7 @@ class FakeBluetooth:
             MOVE_PERCENT_CHAR: b"\x64",
             BATTERY_LEVEL_CHAR: b"\x5a",  # 90%
             BATTERY_VOLTAGE_CHAR: (395).to_bytes(2, "little"),  # 3950 mV
-            CHARGING_CHAR: (5200).to_bytes(2, "little") + b"\x00\x00",  # 5200 mV
+            CHARGING_CHAR: (605).to_bytes(2, "little") + (615).to_bytes(2, "little"),  # charging
         }
         self.missing: set[uuid.UUID] = set()  # characteristics the firmware does not have
 

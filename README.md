@@ -46,8 +46,8 @@ A shade accepts a single Bluetooth connection: close the Soma app and stop the b
    [Docker Compose file](https://github.com/vanderkley/soma-shades/blob/main/docker-compose.yml).
 2. Add the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) with the address of the broker.
 3. Start the bridge. Every shade appears as a device through MQTT discovery, with a cover, sensors for the battery
-   level, battery voltage and solar panel voltage, and a *Sync time* button that sets the clock of the shade for the
-   schedules of the Soma app. On the first connection the shade beeps once.
+   level, battery voltage and the input voltage of the solar panel or USB charger, and a *Sync time* button that sets
+   the clock of the shade for the schedules of the Soma app. On the first connection the shade beeps once.
 
 New shades are found when the bridge starts, or when you publish a scan duration in seconds while it runs:
 ```bash
@@ -68,7 +68,8 @@ retained discovery messages.
 | `homeassistant/cover/smartshade/<shade>/position`          | publish   | `0` (open) to `100` (closed)      |
 | `homeassistant/cover/smartshade/<shade>/battery`           | publish   | battery level, `0` to `100`       |
 | `homeassistant/cover/smartshade/<shade>/battery_voltage`   | publish   | battery voltage in mV             |
-| `homeassistant/cover/smartshade/<shade>/solar_panel`       | publish   | solar panel voltage in mV         |
+| `homeassistant/cover/smartshade/<shade>/input_voltage`     | publish   | charging input voltage in mV      |
+| `homeassistant/cover/smartshade/<shade>/charging_current`  | publish   | charging current, probably in mA  |
 | `homeassistant/sensor/smartshade/<shade>_<sensor>/config`  | publish   | discovery messages of the sensors |
 | `homeassistant/button/smartshade/<shade>_sync_time/config` | publish   | discovery message of the button   |
 | `homeassistant/cover/smartshade/bridge/availability`       | publish   | `online`, `offline` (last will)   |
@@ -143,7 +144,7 @@ configure a password file and start the bridge with `--username` and `--password
 
 Actions of `soma control`:
 - Move: `up`, `down`, `stop`, `set_position VALUE` (0 is open, 100 is closed)
-- Read: `position`, `battery`, `battery_voltage`, `solar_panel`, `motor_speed`, `info`
+- Read: `position`, `battery`, `battery_voltage`, `charging`, `motor_speed`, `info`
 - Other: `set_motor_speed VALUE` (0 to 100), `sync_time`, `beep`
 
 Run `soma COMMAND --help` for the options and `soma -v COMMAND` for debug logging. The options can also be set with

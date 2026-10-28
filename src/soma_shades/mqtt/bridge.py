@@ -42,13 +42,26 @@ class Sensor(NamedTuple):
     device_class: str
     unit: str
     value: Callable[[ShadeClient], int | None]
+    enabled_by_default: bool = True
 
 
 SENSORS = [
     Sensor("battery", "Battery", "battery", "%", lambda shade: shade.battery_level),
     Sensor("battery_voltage", "Battery voltage", "voltage", "mV", lambda shade: shade.battery_voltage),
-    Sensor("solar_panel", "Solar panel", "voltage", "mV", lambda shade: shade.solar_panel_voltage),
+    # of the solar panel or USB charger, 0 without a charger
+    Sensor("input_voltage", "Input voltage", "voltage", "mV", lambda shade: shade.input_voltage),
+    # the unit is not certain, disabled by default
+    Sensor(
+        "charging_current",
+        "Charging current",
+        "current",
+        "mA",
+        lambda shade: shade.charging_current,
+        enabled_by_default=False,
+    ),
 ]
+# sensors of earlier versions, their retained messages are cleared so Home Assistant removes them
+REMOVED_SENSORS = ["solar_panel"]
 
 
 class MQTTBridge:
@@ -315,8 +328,8 @@ class MQTTBridge:
                 logger.error(f"Periodic update of {shade.name!r} failed: {err!r}")
 
     async def read_diagnostics(self, shade: ShadeClient) -> None:
-        """Read the battery voltage and the solar panel voltage, which not every firmware may support."""
-        for read in (shade.get_battery_voltage, shade.get_light_and_panel):
+        """Read the battery voltage and the charging input, which not every firmware may support."""
+        for read in (shade.get_battery_voltage, shade.get_charging):
             try:
                 await read()
             except Exception as err:
@@ -381,9 +394,9 @@ class MQTTBridge:
             await self.publish_state(shade)
 
     async def publish_state(self, shade: ShadeClient) -> None:
+        battery = "unknown" if shade.battery_level is None else f"{shade.battery_level}%"
         logger.info(
-            f"Publishing {shade.name!r} state {shade.cover_status} at position {shade.position}%, "
-            f"battery {shade.battery_level}%"
+            f"Publishing {shade.name!r} state {shade.cover_status} at position {shade.position}%, battery {battery}"
         )
         state = CoverState(shade.cover_status) if shade.cover_status else "unknown"
         await self.publish(shade_topic(shade.name, "state"), state)
@@ -435,11 +448,15 @@ class MQTTBridge:
                 "state_class": "measurement",
                 "unit_of_measurement": sensor.unit,
                 "entity_category": "diagnostic",
+                "enabled_by_default": sensor.enabled_by_default,
                 "availability": availability,
                 "availability_mode": "all",
                 "device": device,
             }
             await self.publish(sensor_config_topic(shade.name, sensor.key), json.dumps(sensor_discovery_message))
+        for key in REMOVED_SENSORS:
+            await self.publish(sensor_config_topic(shade.name, key), None)
+            await self.publish(shade_topic(shade.name, key), None)
 
         # sets the clock of the shade, which drifts fast, for the schedules of the Soma app
         sync_time_discovery_message = {

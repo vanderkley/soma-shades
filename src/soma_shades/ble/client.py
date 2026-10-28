@@ -14,7 +14,6 @@ from soma_shades.ble.protocol import (
     BATTERY_VOLTAGE_CHAR,
     CHARGING_CHAR,
     CONFIG_CHAR,
-    LIGHT_COEFF_TO_LUX,
     MOTOR_CHAR,
     MOVE_PERCENT_CHAR,
     NOTIFY_CHAR,
@@ -71,9 +70,8 @@ class ShadeClient:
         self.motor_speed: int | None = None
         self.battery_level: int | None = None
         self.battery_voltage: int | None = None  # mV
-        self.charging_level: int | None = None
-        self.solar_panel_level: int | None = None
-        self.solar_panel_voltage: int | None = None  # mV
+        self.input_voltage: int | None = None  # mV, of the solar panel or USB charger
+        self.charging_current: int | None = None  # probably mA
         self._position: int | None = None
         self._target_position: int | None = None
         self._connected = False
@@ -435,22 +433,21 @@ class ShadeClient:
         command = bytes([ConfigCommand.MOTOR_SPEED, 0x01, speed_value])
         await self._client.write_gatt_char(CONFIG_CHAR, command, response=True)
 
-    async def get_light_and_panel(self) -> tuple[int, int]:
-        """Read the light level (lux) and solar panel level.
+    async def get_charging(self) -> tuple[int, int]:
+        """Read the input voltage of the solar panel or USB charger in mV, and the charging current.
 
-        According to the protocol documentation, the first two bytes are the solar panel voltage in mV.
+        Both are 0 without a charger. The second value is probably the charging current in mA: it is high while a
+        half empty battery charges, and drops to about 10 when the battery is full.
         """
         response = await self._client.read_gatt_char(CHARGING_CHAR)
-        solar_panel_voltage = int.from_bytes(response[:2], byteorder="little")
-        if solar_panel_voltage != self.solar_panel_voltage:
-            self.solar_panel_voltage = solar_panel_voltage
+        input_voltage = int.from_bytes(response[:2], byteorder="little")
+        charging_current = int.from_bytes(response[2:4], byteorder="little")
+        if (input_voltage, charging_current) != (self.input_voltage, self.charging_current):
+            self.input_voltage = input_voltage
+            self.charging_current = charging_current
             self._notify_update()
-        self.charging_level = solar_panel_voltage * LIGHT_COEFF_TO_LUX
-        self.solar_panel_level = int.from_bytes(response[2:4], byteorder="little")
-        logger.info(
-            f"Shade {self.name!r} charging level {self.charging_level} and solar panel level {self.solar_panel_level}"
-        )
-        return self.charging_level, self.solar_panel_level
+        logger.info(f"Shade {self.name!r} input voltage {input_voltage} mV, charging current {charging_current}")
+        return input_voltage, charging_current
 
     def __repr__(self) -> str:
         return (
