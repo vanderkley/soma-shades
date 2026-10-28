@@ -155,10 +155,11 @@ async def test_stuck_connection_attempt_is_reported_offline(bridge: MQTTBridge, 
     await wait_until(lambda: mqtt_client(bridge).payloads(AVAILABILITY) == ["offline"])
 
 
-async def test_keepalive(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+async def test_keepalive_writes_the_clock(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
     await start(bridge)
-    reads = bluetooth.client.reads.count(BATTERY_LEVEL_CHAR)
-    await wait_until(lambda: bluetooth.client.reads.count(BATTERY_LEVEL_CHAR) >= reads + 2)
+
+    # the shades only count writes as activity, not reads
+    await wait_until(lambda: [char for char, _ in bluetooth.client.writes].count(TIME_CHAR) >= 2)
 
 
 async def test_missing_diagnostics_do_not_break_the_connection(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
@@ -178,7 +179,7 @@ async def test_sync_time_command(bridge: MQTTBridge, bluetooth: FakeBluetooth) -
     before = time.time()
     await bridge.handle_message(message(shade_topic("living_room", "sync_time"), "PRESS"))
 
-    [(char, data)] = bluetooth.client.writes
+    char, data = bluetooth.client.writes[-1]
     assert char == TIME_CHAR
     # the clock of the shade is in local time
     local_time = int.from_bytes(data, "little") - utc_offset.total_seconds()
@@ -227,7 +228,7 @@ async def test_battery_level_change_is_published(bridge: MQTTBridge, bluetooth: 
     await start(bridge)
     await wait_until(lambda: mqtt_client(bridge).payloads(BATTERY)[-1:] == [90])
 
-    bluetooth.values[BATTERY_LEVEL_CHAR] = bytes([89])  # read by the next keepalive
+    bluetooth.client.notify_handlers[BATTERY_LEVEL_CHAR](None, bytearray([89]))
 
     await wait_until(lambda: mqtt_client(bridge).payloads(BATTERY)[-1:] == [89])
 
@@ -238,7 +239,7 @@ async def test_commands(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
     await bridge.handle_message(message(shade_topic("living_room", "set_position"), "40"))
     await bridge.handle_message(message(shade_topic("living_room", "set"), "OPEN"))
 
-    assert bluetooth.client.writes == [(MOVE_PERCENT_CHAR, bytes([40])), (MOTOR_CHAR, bytes([MotorCommand.UP]))]
+    assert bluetooth.client.commands == [(MOVE_PERCENT_CHAR, bytes([40])), (MOTOR_CHAR, bytes([MotorCommand.UP]))]
     await wait_until(lambda: mqtt_client(bridge).payloads(STATE)[-1] == "opening")
 
 
@@ -249,7 +250,7 @@ async def test_command_reconnects_a_lost_shade(bridge: MQTTBridge, bluetooth: Fa
 
     await bridge.handle_message(message(shade_topic("living_room", "set"), "close"))
 
-    assert bluetooth.client.writes == [(MOTOR_CHAR, bytes([MotorCommand.DOWN]))]
+    assert bluetooth.client.commands == [(MOTOR_CHAR, bytes([MotorCommand.DOWN]))]
 
 
 async def test_invalid_messages_are_ignored(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
@@ -260,7 +261,7 @@ async def test_invalid_messages_are_ignored(bridge: MQTTBridge, bluetooth: FakeB
     await bridge.handle_message(message(shade_topic("unknown", "set"), "open"))
     await bridge.handle_message(message("homeassistant/status", "rebooting"))
 
-    assert bluetooth.client.writes == []
+    assert bluetooth.client.commands == []
 
 
 async def test_home_assistant_online_republishes_everything(bridge: MQTTBridge) -> None:

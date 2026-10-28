@@ -15,6 +15,12 @@ services:
       - mosquitto
     environment:
       SOMA_BROKER: mosquitto
+      SOMA_PORT: "1883"
+      # when the broker requires a login
+      # SOMA_USERNAME: soma
+      # SOMA_PASSWORD: secret
+      # scan for new shades when the bridge starts, with "false" a shade removed from the cache stays removed
+      SOMA_DISCOVER: "true"
     volumes:
       # bleak uses the BlueZ daemon of the host, the host needs a Bluetooth adapter within range of the shades
       - /run/dbus:/run/dbus:ro

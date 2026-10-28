@@ -117,9 +117,9 @@ async def test_battery_level_change_notifies_an_update(shade: ShadeClient, bluet
     await shade.connect(timeout=1)
 
     await shade.get_battery_level()
-    await shade.keepalive()  # the same level, no update
+    await shade.get_battery_level()  # the same level, no update
     bluetooth.values[BATTERY_LEVEL_CHAR] = bytes([89])
-    await shade.keepalive()
+    await shade.get_battery_level()
 
     assert updates == [90, 89]
 

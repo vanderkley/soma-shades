@@ -18,6 +18,7 @@ from soma_shades.ble.protocol import (
     CHARGING_CHAR,
     MOVE_PERCENT_CHAR,
     POSITION_CHAR,
+    TIME_CHAR,
 )
 from soma_shades.mqtt.bridge import MQTTBridge
 from soma_shades.mqtt.config import BridgeConfig
@@ -46,6 +47,11 @@ class FakeBleakClient:
 
     async def write_gatt_char(self, char: uuid.UUID, data: bytes, response: bool = True) -> None:
         self.writes.append((char, bytes(data)))
+
+    @property
+    def commands(self) -> list[tuple[uuid.UUID, bytes]]:
+        """The writes without the keepalive, which sets the clock."""
+        return [(char, data) for char, data in self.writes if char != TIME_CHAR]
 
     async def start_notify(self, char: uuid.UUID, handler: Callable[..., Any]) -> None:
         self.notify_handlers[char] = handler

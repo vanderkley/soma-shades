@@ -313,16 +313,24 @@ class ShadeClient:
         The clock counts the seconds since the epoch in local time, not in UTC: shades set by the Soma app in Estonia
         (UTC+2) were 2 hours ahead of UTC.
         """
+        now = await self._write_clock()
+        logger.info(f"Set the {self.name!r} clock to {now.replace(microsecond=0).isoformat()}")
+
+    async def keepalive(self) -> None:
+        """Keep the connection alive, the shade drops a connection 3 minutes after the last write.
+
+        Reads do not count, so the keepalive sets the clock, the only characteristic that can be written without
+        moving the shade or changing its settings.
+        """
+        now = await self._write_clock()
+        logger.debug(f"Keepalive {self.name!r}, set the clock to {now.replace(microsecond=0).isoformat()}")
+
+    async def _write_clock(self) -> datetime:
         now = datetime.now().astimezone()
         utc_offset = now.utcoffset() or timedelta()
         local_time = int(now.timestamp() + utc_offset.total_seconds())
-        logger.info(f"Setting the {self.name!r} clock to {now.replace(microsecond=0).isoformat()}")
         await self._client.write_gatt_char(TIME_CHAR, local_time.to_bytes(4, byteorder="little"), response=True)
-
-    async def keepalive(self) -> None:
-        """Keep the connection alive, the shade drops a connection after 3 minutes without requests."""
-        battery_level = self._set_battery_level(await self._client.read_gatt_char(BATTERY_LEVEL_CHAR))
-        logger.debug(f"Keepalive {self.name!r}, {battery_level}% battery level")
+        return now
 
     async def move_up(self) -> None:
         logger.info(f"Moving {self.name!r} up")

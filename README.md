@@ -84,7 +84,7 @@ All published messages are retained, so Home Assistant also gets the covers when
 
 ### How the bridge works
 - Each shade has its own connection, reconnected with a backoff from 1 second up to 5 minutes.
-- The shades drop idle connections after 3 minutes, so the bridge reads the battery every 2 minutes.
+- The shades drop a connection 3 minutes after the last write, so the bridge sets their clock every 2 minutes.
 - A shade is only reported unavailable when it cannot be reconnected within 2 minutes.
 
 ## Running the bridge as a service

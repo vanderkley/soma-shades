@@ -20,5 +20,5 @@ class BridgeConfig:
     reconnect_backoff_min: float = 1
     reconnect_backoff_max: float = 5 * 60
     stable_connection_time: float = 60  # a connection lasting shorter does not reset the reconnect backoff
-    keepalive_interval: float = 2 * 60  # the shades drop a connection after 3 minutes without requests
+    keepalive_interval: float = 2 * 60  # the shades drop a connection 3 minutes after the last write
     offline_grace_period: float = 2 * 60  # only report a shade offline when reconnecting takes longer

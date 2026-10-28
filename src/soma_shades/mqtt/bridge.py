@@ -272,8 +272,9 @@ class MQTTBridge:
     async def keep_connection_alive(self, shade: ShadeClient) -> None:
         """Wait until the shade disconnects, sending a keepalive request every interval.
 
-        The shades drop a connection after 3 minutes without requests. A single read costs the shade less battery
-        than reconnecting, which rediscovers the services, reads the state and subscribes to notifications again.
+        The shades drop a connection 3 minutes after the last write, reads do not count. A single write costs the
+        shade less battery than reconnecting, which rediscovers the services, reads the state and subscribes to
+        notifications again.
         """
         while True:
             try:
