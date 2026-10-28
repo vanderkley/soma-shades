@@ -16,7 +16,7 @@ class BridgeConfig:
     # timeout of the scan for a shade that is not seen yet, and of disconnecting; a connection attempt has a fixed
     # timeout of 20 seconds in bleak-retry-connector
     connect_timeout: float = 15
-    connect_concurrency: int = 1  # simultaneous Bluetooth connection attempts
+    connect_concurrency: int = 1  # simultaneous Bluetooth connection attempts, including the initialization
     reconnect_backoff_min: float = 1
     reconnect_backoff_max: float = 5 * 60
     stable_connection_time: float = 60  # a connection lasting shorter does not reset the reconnect backoff

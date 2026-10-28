@@ -4,6 +4,16 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-10-28
+
+### Fixed
+- The shades are connected and initialized one by one. Connecting the next shade during the initialization of
+  the previous one made the service discovery and reads fail with `ATT error 0x0e` on a Raspberry Pi, and the
+  bridge then dropped the connection.
+- A battery level notification before the position is read no longer clears the position topic.
+- The bleak warning `Could not determine BlueZ version` is hidden, the Docker image has no `bluetoothctl`. It is
+  still shown with `soma -v`.
+
 ## [1.2.0] - 2026-10-28
 
 ### Added

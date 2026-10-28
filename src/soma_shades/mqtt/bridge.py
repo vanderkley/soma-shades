@@ -243,25 +243,27 @@ class MQTTBridge:
         if shade.is_connected():
             return
 
+        # the next shade connects after the initialization, the Bluetooth adapter of e.g. a Raspberry Pi fails the
+        # service discovery and the reads (ATT error 0x0e) when a connection is set up at the same time
         async with self.connect_semaphore:
             await shade.connect(timeout=self.config.connect_timeout)
 
-        try:
-            # first connection: read the manufacturer etc. and identify the shade with a beep
-            if not any([shade.manufacturer, shade.serial_number, shade.software_version]):
-                await shade.get_info()
-                self.fleet.save()
-                await shade.identify()
+            try:
+                # first connection: read the manufacturer etc. and identify the shade with a beep
+                if not any([shade.manufacturer, shade.serial_number, shade.software_version]):
+                    await shade.get_info()
+                    self.fleet.save()
+                    await shade.identify()
 
-            await shade.get_position()
-            await shade.get_battery_level()
-            await shade.start_notify("position")
-            await shade.start_notify("battery_level")
-        except Exception:
-            # without notifications the state would go stale, so start over on the next attempt
-            await shade.disconnect()
-            raise
-        await self.read_diagnostics(shade)
+                await shade.get_position()
+                await shade.get_battery_level()
+                await shade.start_notify("position")
+                await shade.start_notify("battery_level")
+            except Exception:
+                # without notifications the state would go stale, so start over on the next attempt
+                await shade.disconnect()
+                raise
+            await self.read_diagnostics(shade)
 
         if timer := self.offline_timers.pop(shade.name, None):
             timer.cancel()
@@ -398,9 +400,11 @@ class MQTTBridge:
         logger.info(
             f"Publishing {shade.name!r} state {shade.cover_status} at position {shade.position}%, battery {battery}"
         )
-        state = CoverState(shade.cover_status) if shade.cover_status else "unknown"
-        await self.publish(shade_topic(shade.name, "state"), state)
-        await self.publish(shade_topic(shade.name, "position"), shade.position)
+        # e.g. a battery level notification before the position is read, an empty position would clear the topic
+        if shade.position is not None:
+            state = CoverState(shade.cover_status) if shade.cover_status else "unknown"
+            await self.publish(shade_topic(shade.name, "state"), state)
+            await self.publish(shade_topic(shade.name, "position"), shade.position)
         for sensor in SENSORS:
             if (value := sensor.value(shade)) is not None:
                 await self.publish(shade_topic(shade.name, sensor.key), value)

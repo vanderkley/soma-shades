@@ -10,8 +10,19 @@ from soma_shades.cli.discover import discover
 from soma_shades.cli.probe import probe_sounds
 
 
+def hide_bluez_version_warning(record: logging.LogRecord) -> bool:
+    """Hide the warning of bleak in the Docker image, which has no bluetoothctl to read the BlueZ version from.
+
+    bleak then assumes BlueZ 5.55 or newer, which every supported system has. The warning is logged on the root logger,
+    so it cannot be disabled with the log level of the bleak logger.
+    """
+    return not record.getMessage().startswith("Could not determine BlueZ version")
+
+
 def setup_logging(verbose: bool) -> None:
     handler = colorlog.StreamHandler()
+    if not verbose:
+        handler.addFilter(hide_bluez_version_warning)
     # colors are disabled when the output is not a terminal, or with the NO_COLOR environment variable
     handler.setFormatter(
         colorlog.ColoredFormatter(

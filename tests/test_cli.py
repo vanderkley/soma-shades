@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -6,7 +7,7 @@ from click.testing import CliRunner
 from soma_shades import __version__
 from soma_shades.ble.fleet import ShadeFleet
 from soma_shades.ble.protocol import MOVE_PERCENT_CHAR, NOTIFY_CHAR
-from soma_shades.cli import main
+from soma_shades.cli import hide_bluez_version_warning, main
 from tests.conftest import FakeBluetooth
 
 
@@ -67,3 +68,13 @@ def test_probe_sounds_rejects_invalid_codes(cache_file: Path) -> None:
     )
     assert result.exit_code == 2
     assert "outside the range" in result.output
+
+
+def test_bluez_version_warning_is_hidden() -> None:
+    def record(message: str) -> logging.LogRecord:
+        return logging.LogRecord("root", logging.WARNING, __file__, 0, message, None, None)
+
+    assert not hide_bluez_version_warning(
+        record("Could not determine BlueZ version, bluetoothctl not available, assuming 5.55+")
+    )
+    assert hide_bluez_version_warning(record("Cannot connect to 'living_room'"))

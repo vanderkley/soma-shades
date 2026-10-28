@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 import aiomqtt
+import pytest
 
 from soma_shades.ble.client import ShadeClient
 from soma_shades.ble.protocol import (
@@ -182,6 +183,44 @@ async def test_sync_time_command(bridge: MQTTBridge, bluetooth: FakeBluetooth) -
     # the clock of the shade is in local time
     local_time = int.from_bytes(data, "little") - utc_offset.total_seconds()
     assert int(before) <= local_time <= time.time()
+
+
+async def test_shades_are_initialized_one_by_one(
+    bridge: MQTTBridge, bluetooth: FakeBluetooth, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge.fleet.add(ShadeClient(mac="AA:BB:CC:DD:EE:02", name="Kitchen", manufacturer="Wazombi Labs"))
+    events: list[str] = []
+    connect, start_notify = ShadeClient.connect, ShadeClient.start_notify
+
+    async def logged_connect(self: ShadeClient, timeout: float, max_attempts: int = 3) -> None:
+        events.append(f"connect {self.name}")
+        await connect(self, timeout, max_attempts)
+
+    async def logged_start_notify(self: ShadeClient, notification: Any) -> None:
+        await asyncio.sleep(0.01)  # the other connection task gets a chance to run
+        events.append(f"notify {self.name}")
+        await start_notify(self, notification)
+
+    monkeypatch.setattr(ShadeClient, "connect", logged_connect)
+    monkeypatch.setattr(ShadeClient, "start_notify", logged_start_notify)
+
+    await start(bridge)
+    await wait_until(lambda: len(events) == 6)
+
+    # the second shade connects after both notifications of the first one
+    assert events[1:3] == [f"notify {events[0].split()[1]}"] * 2
+    assert events[3].startswith("connect")
+
+
+async def test_unknown_position_is_not_published(bridge: MQTTBridge, shade: ShadeClient) -> None:
+    # e.g. a battery level notification before the position is read
+    shade.battery_level = 96
+
+    await bridge.publish_state(shade)
+
+    assert mqtt_client(bridge).payloads(STATE) == []
+    assert mqtt_client(bridge).payloads(shade_topic("living_room", "position")) == []
+    assert mqtt_client(bridge).payloads(BATTERY) == [96]
 
 
 async def test_battery_level_change_is_published(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
