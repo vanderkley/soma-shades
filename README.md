@@ -26,15 +26,17 @@ Only the **SOMA Smart Shades 2** are supported. The Smart Shades 3 use a
 This project is not affiliated with Soma.
 
 ## Quick start
-Requirements: Python 3.11+, a Bluetooth LE adapter within range of the shades (Linux with BlueZ, or macOS), and for
+Requirements: Python 3.11+, a Bluetooth LE adapter within range of the shades, and for
 Home Assistant an MQTT broker.
 
 ```bash
 pip install soma-shades                     # or: uv tool install soma-shades
 
-soma discover                               # find the shades, "Living Room" in the Soma app is living_room
+soma discover                               # finds the shades
 soma control living_room down
+soma control living_room up
 soma control living_room set_position 50    # 0 is open, 100 is closed
+soma control living_room beep               # probe sound
 soma bridge --broker 192.168.1.10           # bridge to Home Assistant
 ```
 A shade accepts a single Bluetooth connection: close the Soma app and stop the bridge before using `soma control`.
@@ -84,8 +86,42 @@ All published messages are retained, so Home Assistant also gets the covers when
 
 ### How the bridge works
 - Each shade has its own connection, reconnected with a backoff from 1 second up to 5 minutes.
-- The shades drop a connection 3 minutes after the last write, so the bridge sets their clock every 2 minutes.
+- On battery the shades drop a connection 3 minutes after the last write, so the bridge sets their clock every 2
+  minutes. While charging they keep the connection open.
 - A shade is only reported unavailable when it cannot be reconnected within 2 minutes.
+
+## Bluetooth adapter
+The bridge keeps a connection open to every shade, so the adapter has to hold several connections at the same time.
+After connecting, a shade asks for a connection interval of 20 to 40 ms and a supervision timeout of 800 ms, and drops
+the connection when the adapter cannot provide that.
+
+Use an adapter from the [list of Home Assistant](https://www.home-assistant.io/integrations/bluetooth/#known-working-high-performance-adapters),
+e.g. a branded CSR8510A10 adapter or a Realtek RTL8761BU adapter like the ASUS USB-BT500. Avoid adapters with an
+Actions ATS2851 chip (USB ID `10d7:b012`), often sold as "Bluetooth 5.3": they reject the request, and the shades
+then drop the connection every 105 seconds. Also avoid unbranded CSR clones (USB ID `0a12:0001`). On Linux, check the
+chip with `lsusb` and `sudo btmgmt info`.
+
+On Linux, let BlueZ connect with these parameters right away, so the shades do not need to ask for them. Add this to
+`/etc/bluetooth/main.conf` on the host, then restart BlueZ with `sudo systemctl restart bluetooth`:
+<details>
+<summary>BlueZ settings for <code>/etc/bluetooth/main.conf</code></summary>
+
+```ini
+[LE]
+# shortest time between two connection events, in units of 1.25 ms: 16 × 1.25 = 20 ms (default 24: 30 ms)
+# the shades ask for 16 (20 ms)
+MinConnectionInterval=16
+# longest time between two connection events, in units of 1.25 ms: 32 × 1.25 = 40 ms (default 40: 50 ms)
+# the shades ask for 32 (40 ms), with a longer interval they ask for an update and drop the connection when it fails
+MaxConnectionInterval=32
+# connection events the shade may skip to save power: none (default 0)
+# the shades ask for 0, they answer every event, so a command arrives within one interval
+ConnectionLatency=0
+# time without an answer before the connection is lost, in units of 10 ms: 80 × 10 = 800 ms (default 42: 420 ms)
+# the shades ask for 80 (800 ms), a weak connection then survives short interference
+ConnectionSupervisionTimeout=80
+```
+</details>
 
 ## Running the bridge as a service
 
@@ -171,9 +207,18 @@ bluetoothctl show                     # Powered: yes
   `soma control <shade> battery` while the bridge is stopped.
 - **The Home Assistant Bluetooth integration** competes for the same adapter. Give it a separate adapter, or disable
   it.
+- **All shades fail with `TimeoutError` or `device disappeared`**: BlueZ can get stuck after many failed
+  connections. Restart it with `sudo systemctl restart bluetooth`.
+- **Connections drop at a fixed interval**: show the reason with `sudo btmon | grep -A4 "Disconnect Complete"`.
+  `Unacceptable Connection Parameters (0x3b)` every 105 seconds is the adapter, see
+  [Bluetooth adapter](https://github.com/vanderkley/soma-shades#bluetooth-adapter). `Connection Timeout (0x08)` is
+  the range.
 </details>
 
 ## Python API
+<details>
+<summary>Example: read the state of a shade and move it</summary>
+
 ```python
 import asyncio
 
@@ -196,6 +241,7 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+</details>
 
 ## Development
 See [CONTRIBUTING.md](https://github.com/vanderkley/soma-shades/blob/main/CONTRIBUTING.md) for the development setup,
