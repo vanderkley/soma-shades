@@ -29,8 +29,8 @@ classifiers = [
 ]
 dependencies = [
     "aiomqtt~=2.5",
-    "bleak~=1.1",
-    "bleak-retry-connector~=4.4",
+    "bleak~=3.0",
+    "bleak-retry-connector~=4.7",
     "click~=8.2",
     "colorlog~=6.8",
     "platformdirs~=4.3",
