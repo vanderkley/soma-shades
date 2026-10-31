@@ -10,6 +10,7 @@ SMARTSHADE_TOPIC_PATTERN = re.compile(rf"^{SMARTSHADE_TOPIC}/(?P<device_name>[^/
 # the sensors and buttons of a shade have discovery messages of their own, their topics are next to the cover topics
 SENSOR_TOPIC = "homeassistant/sensor/smartshade"
 BUTTON_TOPIC = "homeassistant/button/smartshade"
+SWITCH_TOPIC = "homeassistant/switch/smartshade"
 
 # the topics the bridge subscribes to
 SUBSCRIPTIONS = [
@@ -18,6 +19,7 @@ SUBSCRIPTIONS = [
     f"{SMARTSHADE_TOPIC}/+/set",
     f"{SMARTSHADE_TOPIC}/+/set_position",
     f"{SMARTSHADE_TOPIC}/+/sync_time",
+    f"{SMARTSHADE_TOPIC}/+/bluetooth_connection_set",
 ]
 
 
@@ -33,6 +35,10 @@ def button_config_topic(shade_name: str, button: str) -> str:
     return f"{BUTTON_TOPIC}/{shade_name}_{button}/config"
 
 
+def switch_config_topic(shade_name: str, switch: str) -> str:
+    return f"{SWITCH_TOPIC}/{shade_name}_{switch}/config"
+
+
 class HomeAssistantStatus(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
@@ -41,6 +47,11 @@ class HomeAssistantStatus(StrEnum):
 class CoverAvailability(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
+
+
+class SwitchState(StrEnum):
+    ON = "ON"
+    OFF = "OFF"
 
 
 class CoverState(StrEnum):

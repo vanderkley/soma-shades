@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from soma_shades.ble.client import ShadeClient
@@ -20,6 +22,29 @@ def test_to_dict_and_from_dict() -> None:
     assert data["name"] == "living_room"
     restored = ShadeClient.from_dict({**data, "unknown": "ignored"})
     assert restored.to_dict() == data
+
+
+def test_bluetooth_enabled_is_stored() -> None:
+    assert ShadeClient.from_dict({"mac": "AA:BB", "name": "Older cache file"}).bluetooth_enabled
+
+    shade = ShadeClient(mac="AA:BB", name="Living Room", bluetooth_enabled=False)
+
+    assert not ShadeClient.from_dict(shade.to_dict()).bluetooth_enabled
+    assert shade.availability_status == "disabled"
+
+
+async def test_connected_since(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    assert shade.connected_since is None
+
+    await shade.connect(timeout=1)
+
+    connected_since = shade.connected_since
+    assert connected_since is not None
+    assert datetime.fromisoformat(connected_since).utcoffset() is not None  # Home Assistant needs the timezone
+
+    await shade.disconnect()
+
+    assert shade.connected_since is None
 
 
 def test_display_name() -> None:

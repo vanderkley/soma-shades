@@ -48,13 +48,18 @@ A shade accepts a single Bluetooth connection: close the Soma app and stop the b
    [Docker Compose file](https://github.com/vanderkley/soma-shades/blob/main/docker-compose.yml).
 2. Add the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) with the address of the broker.
 3. Start the bridge. Every shade appears as a device through MQTT discovery, with a cover, sensors for the battery
-   level, battery voltage and the input voltage of the solar panel or USB charger, and a *Sync time* button that sets
-   the clock of the shade for the schedules of the Soma app. On the first connection the shade beeps once.
+   level, battery voltage, input voltage of the solar panel or USB charger and the start of the connection, a
+   *Sync time* button that sets the clock of the shade for the schedules of the Soma app, and a *Bluetooth connection*
+   switch. On the first connection the shade beeps once.
 
 New shades are found when the bridge starts, or when you publish a scan duration in seconds while it runs:
 ```bash
 mosquitto_pub -h <broker> -t homeassistant/cover/discover -m 20
 ```
+
+To configure a shade in the Soma app, turn off its *Bluetooth connection* switch. The bridge disconnects the shade and
+leaves it alone, also after a restart, until you turn the switch on again. In the meantime the shade is unavailable in
+Home Assistant, so its automations do not work.
 
 To remove a shade, remove it from the cache file and delete the device in Home Assistant, which also clears its
 retained discovery messages.
@@ -62,24 +67,28 @@ retained discovery messages.
 <details>
 <summary>MQTT topics</summary>
 
-| Topic                                                      | Direction | Payload                           |
-|------------------------------------------------------------|-----------|-----------------------------------|
-| `homeassistant/cover/smartshade/<shade>/config`            | publish   | discovery message                 |
-| `homeassistant/cover/smartshade/<shade>/availability`      | publish   | `online`, `offline`               |
-| `homeassistant/cover/smartshade/<shade>/state`             | publish   | `open`, `closed`, `opening`, ...  |
-| `homeassistant/cover/smartshade/<shade>/position`          | publish   | `0` (open) to `100` (closed)      |
-| `homeassistant/cover/smartshade/<shade>/battery`           | publish   | battery level, `0` to `100`       |
-| `homeassistant/cover/smartshade/<shade>/battery_voltage`   | publish   | battery voltage in mV             |
-| `homeassistant/cover/smartshade/<shade>/input_voltage`     | publish   | charging input voltage in mV      |
-| `homeassistant/cover/smartshade/<shade>/charging_current`  | publish   | charging current, probably in mA  |
-| `homeassistant/sensor/smartshade/<shade>_<sensor>/config`  | publish   | discovery messages of the sensors |
-| `homeassistant/button/smartshade/<shade>_sync_time/config` | publish   | discovery message of the button   |
-| `homeassistant/cover/smartshade/bridge/availability`       | publish   | `online`, `offline` (last will)   |
-| `homeassistant/cover/smartshade/<shade>/set`               | subscribe | `open`, `close`, `stop`           |
-| `homeassistant/cover/smartshade/<shade>/set_position`      | subscribe | `0` to `100`                      |
-| `homeassistant/cover/smartshade/<shade>/sync_time`         | subscribe | any payload sets the clock        |
-| `homeassistant/cover/discover`                             | subscribe | scan duration in seconds (max 30) |
-| `homeassistant/status`                                     | subscribe | `online` republishes all messages |
+| Topic                                                                 | Direction | Payload                           |
+|-----------------------------------------------------------------------|-----------|-----------------------------------|
+| `homeassistant/cover/smartshade/<shade>/config`                       | publish   | discovery message                 |
+| `homeassistant/cover/smartshade/<shade>/availability`                 | publish   | `online`, `offline`               |
+| `homeassistant/cover/smartshade/<shade>/state`                        | publish   | `open`, `closed`, `opening`, ...  |
+| `homeassistant/cover/smartshade/<shade>/position`                     | publish   | `0` (open) to `100` (closed)      |
+| `homeassistant/cover/smartshade/<shade>/battery`                      | publish   | battery level, `0` to `100`       |
+| `homeassistant/cover/smartshade/<shade>/battery_voltage`              | publish   | battery voltage in mV             |
+| `homeassistant/cover/smartshade/<shade>/input_voltage`                | publish   | charging input voltage in mV      |
+| `homeassistant/cover/smartshade/<shade>/charging_current`             | publish   | charging current, probably in mA  |
+| `homeassistant/cover/smartshade/<shade>/connected_since`              | publish   | start of the connection           |
+| `homeassistant/cover/smartshade/<shade>/bluetooth_connection`         | publish   | `ON`, `OFF`                       |
+| `homeassistant/switch/smartshade/<shade>_bluetooth_connection/config` | publish   | discovery message of the switch   |
+| `homeassistant/sensor/smartshade/<shade>_<sensor>/config`             | publish   | discovery messages of the sensors |
+| `homeassistant/button/smartshade/<shade>_sync_time/config`            | publish   | discovery message of the button   |
+| `homeassistant/cover/smartshade/bridge/availability`                  | publish   | `online`, `offline` (last will)   |
+| `homeassistant/cover/smartshade/<shade>/set`                          | subscribe | `open`, `close`, `stop`           |
+| `homeassistant/cover/smartshade/<shade>/set_position`                 | subscribe | `0` to `100`                      |
+| `homeassistant/cover/smartshade/<shade>/sync_time`                    | subscribe | any payload sets the clock        |
+| `homeassistant/cover/smartshade/<shade>/bluetooth_connection_set`     | subscribe | `ON`, `OFF`                       |
+| `homeassistant/cover/discover`                                        | subscribe | scan duration in seconds (max 30) |
+| `homeassistant/status`                                                | subscribe | `online` republishes all messages |
 
 All published messages are retained, so Home Assistant also gets the covers when it starts after the bridge.
 </details>

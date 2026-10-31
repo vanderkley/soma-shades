@@ -8,6 +8,7 @@ import aiomqtt
 import pytest
 
 from soma_shades.ble.client import ShadeClient
+from soma_shades.ble.fleet import ShadeFleet
 from soma_shades.ble.protocol import (
     BATTERY_LEVEL_CHAR,
     BATTERY_VOLTAGE_CHAR,
@@ -23,12 +24,15 @@ from soma_shades.mqtt.topics import (
     button_config_topic,
     sensor_config_topic,
     shade_topic,
+    switch_config_topic,
 )
 from tests.conftest import FakeBluetooth, mqtt_client, wait_until
 
 AVAILABILITY = shade_topic("living_room", "availability")
 STATE = shade_topic("living_room", "state")
 BATTERY = shade_topic("living_room", "battery")
+BLUETOOTH_CONNECTION = shade_topic("living_room", "bluetooth_connection")
+BLUETOOTH_CONNECTION_SET = shade_topic("living_room", "bluetooth_connection_set")
 
 
 def message(topic: str, payload: str) -> aiomqtt.Message:
@@ -80,11 +84,88 @@ async def test_sensor_discovery_messages(bridge: MQTTBridge, shade: ShadeClient)
         assert {"topic": BRIDGE_AVAILABILITY_TOPIC} in config["availability"]
 
 
-async def test_removed_sensors_are_cleared(bridge: MQTTBridge, shade: ShadeClient) -> None:
+async def test_connected_since_sensor(bridge: MQTTBridge, shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    await bridge.publish_config(shade)
+    client = mqtt_client(bridge)
+
+    config: dict[str, Any] = json.loads(client.payloads(sensor_config_topic("living_room", "connected_since"))[0])
+    assert config["device_class"] == "timestamp"
+    assert "unit_of_measurement" not in config  # Home Assistant rejects a timestamp with a unit or state class
+    assert "state_class" not in config
+
+    await start(bridge)
+
+    await wait_until(
+        lambda: client.payloads(shade_topic("living_room", "connected_since"))[-1:] == [shade.connected_since]
+    )
+
+
+async def test_bluetooth_connection_switch_stays_available(bridge: MQTTBridge, shade: ShadeClient) -> None:
     await bridge.publish_config(shade)
 
-    # an empty retained message removes the sensor of an earlier version from Home Assistant
-    assert mqtt_client(bridge).payloads(sensor_config_topic("living_room", "solar_panel")) == [None]
+    topic = switch_config_topic("living_room", "bluetooth_connection")
+    assert topic == "homeassistant/switch/smartshade/living_room_bluetooth_connection/config"
+    config: dict[str, Any] = json.loads(mqtt_client(bridge).payloads(topic)[0])
+    assert config["command_topic"] == BLUETOOTH_CONNECTION_SET
+    assert config["state_topic"] == BLUETOOTH_CONNECTION
+    # with the availability of the shade the switch could not connect it again
+    assert config["availability"] == [{"topic": BRIDGE_AVAILABILITY_TOPIC}]
+
+
+async def test_disable_and_enable_the_bluetooth_connection(
+    bridge: MQTTBridge, shade: ShadeClient, bluetooth: FakeBluetooth
+) -> None:
+    await start(bridge)
+    client = mqtt_client(bridge)
+
+    await bridge.handle_message(message(BLUETOOTH_CONNECTION_SET, "OFF"))
+
+    assert not bluetooth.client.is_connected
+    assert client.payloads(AVAILABILITY)[-1] == "offline"  # right away, without the grace period
+    assert client.payloads(BLUETOOTH_CONNECTION) == ["OFF"]
+    assert not ShadeFleet(bridge.fleet.cache_file).get("living_room").bluetooth_enabled
+
+    await asyncio.sleep(0.2)  # longer than the reconnect backoff
+    assert len(bluetooth.clients) == 1  # stays disconnected
+
+    await bridge.handle_message(message(BLUETOOTH_CONNECTION_SET, "ON"))
+
+    await wait_until(lambda: client.payloads(AVAILABILITY)[-1] == "online")
+    assert len(bluetooth.clients) == 2
+    assert client.payloads(BLUETOOTH_CONNECTION) == ["OFF", "ON"]
+    assert ShadeFleet(bridge.fleet.cache_file).get("living_room").bluetooth_enabled
+
+
+async def test_disabled_shade_ignores_commands(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+    await bridge.handle_message(message(BLUETOOTH_CONNECTION_SET, "OFF"))
+
+    await bridge.handle_message(message(shade_topic("living_room", "set"), "close"))
+
+    assert len(bluetooth.clients) == 1  # the command does not connect the shade
+    assert bluetooth.client.commands == []
+
+
+async def test_disabled_shade_stays_disconnected_after_a_restart(
+    bridge: MQTTBridge, shade: ShadeClient, bluetooth: FakeBluetooth
+) -> None:
+    shade.bluetooth_enabled = False
+
+    bridge.start_shade_connections()
+    await bridge.publish_all()
+    await asyncio.sleep(0.1)
+
+    assert bluetooth.clients == []
+    assert mqtt_client(bridge).payloads(AVAILABILITY) == ["offline"]
+    assert mqtt_client(bridge).payloads(BLUETOOTH_CONNECTION) == ["OFF"]
+
+
+async def test_invalid_bluetooth_connection_payload_is_ignored(bridge: MQTTBridge, bluetooth: FakeBluetooth) -> None:
+    await start(bridge)
+
+    await bridge.handle_message(message(BLUETOOTH_CONNECTION_SET, "maybe"))
+
+    assert bluetooth.client.is_connected
 
 
 async def test_sync_time_button_discovery_message(bridge: MQTTBridge, shade: ShadeClient) -> None:
@@ -271,10 +352,18 @@ async def test_home_assistant_online_republishes_everything(bridge: MQTTBridge) 
     await bridge.handle_message(message("homeassistant/status", "online"))
 
     topics = {topic for topic, *_ in mqtt_client(bridge).published}
-    sensors = ("battery", "battery_voltage", "input_voltage", "charging_current")
-    ends = ("config", "availability", "state", "position", *sensors, "solar_panel")  # solar_panel is cleared
-    configs = {sensor_config_topic("living_room", sensor) for sensor in (*sensors, "solar_panel")}
+    sensors = ("battery", "battery_voltage", "input_voltage", "charging_current", "connected_since")
+    ends = (
+        "config",
+        "availability",
+        "state",
+        "position",
+        "bluetooth_connection",
+        *sensors,
+    )
+    configs = {sensor_config_topic("living_room", sensor) for sensor in sensors}
     configs.add(button_config_topic("living_room", "sync_time"))
+    configs.add(switch_config_topic("living_room", "bluetooth_connection"))
     assert topics == {shade_topic("living_room", end) for end in ends} | configs
 
 

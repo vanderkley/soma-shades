@@ -4,6 +4,13 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-31
+
+### Added
+- A *Bluetooth connection* switch for every shade in Home Assistant. Turned off, the bridge disconnects the shade and
+  leaves it free for e.g. the Soma app, also after a restart of the bridge.
+- A *Connected since* sensor with the start of the connection.
+
 ## [1.2.2] - 2026-10-28
 
 ### Fixed

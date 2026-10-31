@@ -24,9 +24,11 @@ from soma_shades.mqtt.topics import (
     CoverSet,
     CoverState,
     HomeAssistantStatus,
+    SwitchState,
     button_config_topic,
     sensor_config_topic,
     shade_topic,
+    switch_config_topic,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,8 +42,8 @@ class Sensor(NamedTuple):
     key: str
     name: str
     device_class: str
-    unit: str
-    value: Callable[[ShadeClient], int | None]
+    unit: str | None
+    value: Callable[[ShadeClient], int | str | None]
     enabled_by_default: bool = True
 
 
@@ -59,9 +61,9 @@ SENSORS = [
         lambda shade: shade.charging_current,
         enabled_by_default=False,
     ),
+    # Home Assistant shows and updates the duration by itself
+    Sensor("connected_since", "Connected since", "timestamp", None, lambda shade: shade.connected_since),
 ]
-# sensors of earlier versions, their retained messages are cleared so Home Assistant removes them
-REMOVED_SENSORS = ["solar_panel"]
 
 
 class MQTTBridge:
@@ -189,6 +191,42 @@ class MQTTBridge:
             await self.control_shade(device_name, lambda shade: shade.set_position(target_position))
         elif end_of_topic == "sync_time":
             await self.control_shade(device_name, ShadeClient.sync_time)
+        elif end_of_topic == "bluetooth_connection_set":
+            state = SwitchState(payload.upper())
+            if shade := self.fleet.find(device_name):
+                await self.set_bluetooth_enabled(shade, state == SwitchState.ON)
+            else:
+                logger.warning(f"Smart Shade {device_name!r} not found")
+
+    async def set_bluetooth_enabled(self, shade: ShadeClient, enabled: bool) -> None:
+        """Connect to a shade, or disconnect it and leave it free for e.g. the Soma app."""
+        if shade.bluetooth_enabled != enabled:
+            logger.info(f"{'Enabling' if enabled else 'Disabling'} the Bluetooth connection of {shade.name!r}")
+            shade.bluetooth_enabled = enabled
+            self.fleet.save()  # stays disabled when the bridge restarts, e.g. during the configuration in the app
+            if enabled:
+                self.start_shade_connections()
+            else:
+                await self.stop_shade_connection(shade)
+        await self.publish_bluetooth_enabled(shade)
+
+    async def stop_shade_connection(self, shade: ShadeClient) -> None:
+        """Stop the connection task of a shade, disconnect it and report it offline right away."""
+        if task := self.connection_tasks.pop(shade.name, None):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if timer := self.offline_timers.pop(shade.name, None):
+            timer.cancel()
+        try:
+            async with shade.lock:  # waits for a running command
+                await shade.disconnect()
+        except Exception as err:
+            logger.warning(f"Cannot disconnect from {shade.name!r}: {err!r}")
+        await self.publish_availability(shade, CoverAvailability.OFFLINE)
+
+    async def publish_bluetooth_enabled(self, shade: ShadeClient) -> None:
+        state = SwitchState.ON if shade.bluetooth_enabled else SwitchState.OFF
+        await self.publish(shade_topic(shade.name, "bluetooth_connection"), state)
 
     async def discover_shades(self, scan_for: float) -> None:
         """Discover shades via Bluetooth and keep a connection with each of them."""
@@ -200,9 +238,9 @@ class MQTTBridge:
         await self.publish_all()  # announce newly discovered shades to Home Assistant
 
     def start_shade_connections(self) -> None:
-        """Start a connection task for each shade that does not have one yet."""
+        """Start a connection task for each enabled shade that does not have one yet."""
         for shade in self.fleet.shades:
-            if shade.name in self.connection_tasks:
+            if not shade.bluetooth_enabled or shade.name in self.connection_tasks:
                 continue
             shade.on_update = functools.partial(self.state_updates.put_nowait, shade)
             self.connection_tasks[shade.name] = self.spawn(
@@ -312,6 +350,9 @@ class MQTTBridge:
             return
         try:
             async with shade.lock:
+                if not shade.bluetooth_enabled:
+                    logger.warning(f"Ignoring a command for {device_name!r}, its Bluetooth connection is disabled")
+                    return
                 await self.connect_shade(shade)
                 await command(shade)
         except Exception as err:
@@ -377,6 +418,9 @@ class MQTTBridge:
         """Publish the discovery message, availability and state of all shades, e.g. after connecting to the broker."""
         for shade in self.fleet.shades:
             await self.publish_config(shade)
+            await self.publish_bluetooth_enabled(shade)
+            if not shade.bluetooth_enabled:
+                self.availability[shade.name] = CoverAvailability.OFFLINE  # also after a restart of the bridge
             if shade.name in self.availability:
                 await self.publish_availability(shade, self.availability[shade.name], force=True)
             if shade.cover_status:
@@ -411,7 +455,7 @@ class MQTTBridge:
                 await self.publish(shade_topic(shade.name, sensor.key), value)
 
     async def publish_config(self, shade: ShadeClient) -> None:
-        """Publish the Home Assistant MQTT discovery messages of a shade, which create its cover, sensors and button."""
+        """Publish the Home Assistant MQTT discovery messages of a shade, which create all its entities."""
         # the entities are available when both the bridge and the shade are "online"
         availability = [
             {"topic": shade_topic(shade.name, "availability")},
@@ -450,8 +494,8 @@ class MQTTBridge:
                 "unique_id": f"{shade.name}_{sensor.key}",
                 "state_topic": shade_topic(shade.name, sensor.key),
                 "device_class": sensor.device_class,
-                "state_class": "measurement",
-                "unit_of_measurement": sensor.unit,
+                # a timestamp has no unit and is not a measurement
+                **({"state_class": "measurement", "unit_of_measurement": sensor.unit} if sensor.unit else {}),
                 "entity_category": "diagnostic",
                 "enabled_by_default": sensor.enabled_by_default,
                 "availability": availability,
@@ -459,9 +503,6 @@ class MQTTBridge:
                 "device": device,
             }
             await self.publish(sensor_config_topic(shade.name, sensor.key), json.dumps(sensor_discovery_message))
-        for key in REMOVED_SENSORS:
-            await self.publish(sensor_config_topic(shade.name, key), None)
-            await self.publish(shade_topic(shade.name, key), None)
 
         # sets the clock of the shade, which drifts fast, for the schedules of the Soma app
         sync_time_discovery_message = {
@@ -475,6 +516,20 @@ class MQTTBridge:
             "device": device,
         }
         await self.publish(button_config_topic(shade.name, "sync_time"), json.dumps(sync_time_discovery_message))
+
+        bluetooth_connection_discovery_message = {
+            "name": "Bluetooth connection",
+            "unique_id": f"{shade.name}_bluetooth_connection",
+            "command_topic": shade_topic(shade.name, "bluetooth_connection_set"),
+            "state_topic": shade_topic(shade.name, "bluetooth_connection"),
+            "icon": "mdi:bluetooth",
+            # only the bridge: the switch has to work when the shade is disconnected, to connect it again
+            "availability": [{"topic": BRIDGE_AVAILABILITY_TOPIC}],
+            "device": device,
+        }
+        await self.publish(
+            switch_config_topic(shade.name, "bluetooth_connection"), json.dumps(bluetooth_connection_discovery_message)
+        )
 
     async def run_periodically(
         self, func: Callable[[], Awaitable[None] | None], interval: float, startup_delay: float = 0

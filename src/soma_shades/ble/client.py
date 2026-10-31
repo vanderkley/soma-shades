@@ -59,6 +59,7 @@ class ShadeClient:
         firmware_version: str | None = None,
         software_version: str | None = None,
         hardware_version: str | None = None,
+        bluetooth_enabled: bool = True,
     ):
         self.mac = mac
         self.name = to_snake_case(name)
@@ -67,6 +68,7 @@ class ShadeClient:
         self.firmware_version = firmware_version
         self.software_version = software_version
         self.hardware_version = hardware_version
+        self.bluetooth_enabled = bluetooth_enabled  # False leaves the shade free for e.g. the Soma app
         self.motor_speed: int | None = None
         self.battery_level: int | None = None
         self.battery_voltage: int | None = None  # mV
@@ -96,6 +98,7 @@ class ShadeClient:
             "firmware_version",
             "software_version",
             "hardware_version",
+            "bluetooth_enabled",
         )
         return cls(**{key: data[key] for key in keys if key in data})
 
@@ -108,6 +111,7 @@ class ShadeClient:
             "firmware_version": self.firmware_version,
             "software_version": self.software_version,
             "hardware_version": self.hardware_version,
+            "bluetooth_enabled": self.bluetooth_enabled,
         }
 
     @property
@@ -116,6 +120,8 @@ class ShadeClient:
 
     @property
     def availability_status(self) -> str:
+        if not self.bluetooth_enabled:
+            return "disabled"
         return "online" if self.connected else "offline"
 
     @property
@@ -154,6 +160,13 @@ class ShadeClient:
         if not self.last_connect_time:
             return None
         return str(datetime.now() - self.last_connect_time).split(".")[0]
+
+    @property
+    def connected_since(self) -> str | None:
+        """The start of the current connection as an ISO 8601 timestamp with the timezone."""
+        if not self.last_connect_time:
+            return None
+        return self.last_connect_time.astimezone().isoformat(timespec="seconds")
 
     @property
     def _client(self) -> BleakClient:
