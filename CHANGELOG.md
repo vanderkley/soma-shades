@@ -4,6 +4,21 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-10-31
+
+### Changed
+- The command line tool and the MQTT bridge moved to an extra, install them with
+  `pip install 'soma-shades[bridge]'`. The Docker image includes them. `pip install soma-shades` installs the library,
+  which the [Home Assistant integration](https://github.com/vanderkley/soma-shades-ha) uses.
+- The position, battery level and diagnostics of a connected shade are refreshed together with a keepalive.
+- The `[LE]` settings in `/etc/bluetooth/main.conf` are a tip for adapters that drop connections, with a good adapter
+  the default settings of BlueZ work.
+
+### Added
+- `ShadeConnection`, which keeps a connection open with reconnects and a keepalive, moved from the bridge to the
+  library.
+- A `ble_device` argument of `ShadeClient`, and `ShadeDisabledError`.
+
 ## [1.4.0] - 2026-10-31
 
 ### Changed

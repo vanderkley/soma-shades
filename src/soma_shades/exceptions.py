@@ -20,3 +20,7 @@ class ShadeNotConnectedError(SomaShadesError):
 
 class InvalidValueError(SomaShadesError, ValueError):
     """An invalid value, e.g. a position outside the range of 0 to 100."""
+
+
+class ShadeDisabledError(SomaShadesError):
+    """The Bluetooth connection of the shade is disabled."""

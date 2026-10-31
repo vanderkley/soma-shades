@@ -60,6 +60,7 @@ class ShadeClient:
         software_version: str | None = None,
         hardware_version: str | None = None,
         bluetooth_enabled: bool = True,
+        ble_device: BLEDevice | None = None,
     ):
         self.mac = mac
         self.name = to_snake_case(name)
@@ -79,7 +80,7 @@ class ShadeClient:
         self._connected = False
         self.last_connect_time: datetime | None = None
         self.last_disconnect_time: datetime | None = None
-        self.ble_device: BLEDevice | None = None
+        self.ble_device = ble_device  # scanned for when connecting when it is not given
         self.ble_client: BleakClient | None = None
         self.lock = asyncio.Lock()
         self._disconnected = asyncio.Event()
@@ -229,6 +230,7 @@ class ShadeClient:
             self.connected = False
             self.last_connect_time = None
             self._disconnected.set()
+            self._notify_update()
 
         logger.info(f"Connecting to {self.name!r} (MAC: {self.mac})...")
         try:

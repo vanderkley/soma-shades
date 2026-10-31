@@ -2,7 +2,7 @@ FROM python:3.14-slim
 
 COPY pyproject.toml README.md LICENSE /src/
 COPY src /src/src
-RUN pip install --no-cache-dir /src && rm -rf /src
+RUN pip install --no-cache-dir "/src[bridge]" && rm -rf /src
 
 # the shades cache, mount a volume to keep it
 ENV SOMA_CACHE_FILE=/data/shades.json

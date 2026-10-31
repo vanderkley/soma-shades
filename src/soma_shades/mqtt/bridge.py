@@ -3,7 +3,6 @@ import functools
 import json
 import logging
 import signal
-import time
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, NamedTuple, TypeVar
 
@@ -11,7 +10,9 @@ import aiomqtt
 from prettytable import PrettyTable
 
 from soma_shades.ble.client import ShadeClient
+from soma_shades.ble.connection import ShadeConnection
 from soma_shades.ble.fleet import ShadeFleet
+from soma_shades.exceptions import ShadeDisabledError
 from soma_shades.mqtt.config import BridgeConfig
 from soma_shades.mqtt.topics import (
     BRIDGE_AVAILABILITY_TOPIC,
@@ -70,9 +71,9 @@ class MQTTBridge:
     """A bridge between the Soma smart shades and Home Assistant, through MQTT.
 
     Everything runs in a single asyncio event loop:
-    - a connection task per shade keeps the Bluetooth connection alive and reconnects with an exponential backoff
+    - a `ShadeConnection` per shade keeps the Bluetooth connection alive
     - the MQTT client receives the commands from Home Assistant and publishes the availability and state
-    - periodic tasks log a status table and refresh the position and battery level
+    - a periodic task logs a status table
     """
 
     def __init__(self, fleet: ShadeFleet, config: BridgeConfig | None = None):
@@ -81,10 +82,9 @@ class MQTTBridge:
         self.client: aiomqtt.Client | None = None
         self.mqtt_task: asyncio.Task[None] | None = None
         self.tasks: set[asyncio.Task[Any]] = set()
-        self.connection_tasks: dict[str, asyncio.Task[None]] = {}  # Bluetooth connection task per shade name
+        self.connections: dict[str, ShadeConnection] = {}  # Bluetooth connection per shade name
         self.state_updates: asyncio.Queue[ShadeClient] = asyncio.Queue()
         self.availability: dict[str, str] = {}  # last availability status per shade name
-        self.offline_timers: dict[str, asyncio.Task[None]] = {}  # reports a shade offline after the grace period
         self.connect_semaphore = asyncio.Semaphore(self.config.connect_concurrency)
 
     async def run(self, discover: bool = True) -> None:
@@ -100,14 +100,6 @@ class MQTTBridge:
         self.spawn(self.publish_state_updates(), name="publish_state_updates")
         if self.config.status_table_interval:
             self.spawn(self.run_periodically(self.log_status_table, self.config.status_table_interval), name="status")
-        self.spawn(
-            self.run_periodically(
-                self.update_shades,
-                self.config.update_interval,
-                startup_delay=self.config.update_interval,  # the shades are updated when they connect
-            ),
-            name="update_shades",
-        )
         self.mqtt_task = self.spawn(self.run_mqtt(), name="mqtt")
         try:
             await asyncio.Event().wait()  # run forever
@@ -207,22 +199,8 @@ class MQTTBridge:
             if enabled:
                 self.start_shade_connections()
             else:
-                await self.stop_shade_connection(shade)
+                await self.connection(shade).stop()
         await self.publish_bluetooth_enabled(shade)
-
-    async def stop_shade_connection(self, shade: ShadeClient) -> None:
-        """Stop the connection task of a shade, disconnect it and report it offline right away."""
-        if task := self.connection_tasks.pop(shade.name, None):
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        if timer := self.offline_timers.pop(shade.name, None):
-            timer.cancel()
-        try:
-            async with shade.lock:  # waits for a running command
-                await shade.disconnect()
-        except Exception as err:
-            logger.warning(f"Cannot disconnect from {shade.name!r}: {err!r}")
-        await self.publish_availability(shade, CoverAvailability.OFFLINE)
 
     async def publish_bluetooth_enabled(self, shade: ShadeClient) -> None:
         state = SwitchState.ON if shade.bluetooth_enabled else SwitchState.OFF
@@ -237,110 +215,31 @@ class MQTTBridge:
         self.start_shade_connections()
         await self.publish_all()  # announce newly discovered shades to Home Assistant
 
-    def start_shade_connections(self) -> None:
-        """Start a connection task for each enabled shade that does not have one yet."""
-        for shade in self.fleet.shades:
-            if not shade.bluetooth_enabled or shade.name in self.connection_tasks:
-                continue
+    def connection(self, shade: ShadeClient) -> ShadeConnection:
+        """The Bluetooth connection of a shade."""
+        if shade.name not in self.connections:
             shade.on_update = functools.partial(self.state_updates.put_nowait, shade)
-            self.connection_tasks[shade.name] = self.spawn(
-                self.maintain_connection(shade), name=f"connection {shade.name}"
+            self.connections[shade.name] = ShadeConnection(
+                shade,
+                self.config,
+                connect_semaphore=self.connect_semaphore,
+                on_availability=functools.partial(self.report_availability, shade),
+                on_first_connection=functools.partial(self.first_connection, shade),
             )
+        return self.connections[shade.name]
 
-    async def maintain_connection(self, shade: ShadeClient) -> None:
-        """Keep the Bluetooth connection with a shade alive, reconnect with an exponential backoff.
+    def start_shade_connections(self) -> None:
+        """Start the connection of each enabled shade that does not have one yet."""
+        for shade in self.fleet.shades:
+            self.connection(shade).start()
 
-        The shade is only reported offline when it cannot be reconnected within the grace period, which avoids a
-        flapping availability in Home Assistant on short connection drops.
-        """
-        backoff = self.config.reconnect_backoff_min
-        self.start_offline_timer(shade)
-        while True:
-            try:
-                async with shade.lock:
-                    await self.connect_shade(shade)
-            except Exception as err:
-                logger.warning(f"Cannot connect to {shade.name!r}, retry in {backoff:g} seconds: {err}")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, self.config.reconnect_backoff_max)
-                continue
+    async def report_availability(self, shade: ShadeClient, online: bool) -> None:
+        await self.publish_availability(shade, CoverAvailability.ONLINE if online else CoverAvailability.OFFLINE)
 
-            connected_since = time.monotonic()
-            await self.keep_connection_alive(shade)
-            self.start_offline_timer(shade)
-            if time.monotonic() - connected_since >= self.config.stable_connection_time:
-                backoff = self.config.reconnect_backoff_min
-            else:
-                # the shade drops the connection right away, don't hammer it with reconnects
-                logger.warning(f"Connection to {shade.name!r} was unstable, reconnect in {backoff:g} seconds")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, self.config.reconnect_backoff_max)
-
-    async def connect_shade(self, shade: ShadeClient) -> None:
-        """Connect to a shade and initialize it, the caller must hold the shade lock."""
-        if shade.is_connected():
-            return
-
-        # the next shade connects after the initialization, the Bluetooth adapter of e.g. a Raspberry Pi fails the
-        # service discovery and the reads (ATT error 0x0e) when a connection is set up at the same time
-        async with self.connect_semaphore:
-            await shade.connect(timeout=self.config.connect_timeout)
-
-            try:
-                # first connection: read the manufacturer etc. and identify the shade with a beep
-                if not any([shade.manufacturer, shade.serial_number, shade.software_version]):
-                    await shade.get_info()
-                    self.fleet.save()
-                    await shade.identify()
-
-                await shade.get_position()
-                await shade.get_battery_level()
-                await shade.start_notify("position")
-                await shade.start_notify("battery_level")
-            except Exception:
-                # without notifications the state would go stale, so start over on the next attempt
-                await shade.disconnect()
-                raise
-            await self.read_diagnostics(shade)
-
-        if timer := self.offline_timers.pop(shade.name, None):
-            timer.cancel()
-        await self.publish_availability(shade, CoverAvailability.ONLINE)
-
-    async def keep_connection_alive(self, shade: ShadeClient) -> None:
-        """Wait until the shade disconnects, sending a keepalive request every interval.
-
-        The shades drop a connection 3 minutes after the last write, reads do not count. A single write costs the
-        shade less battery than reconnecting, which rediscovers the services, reads the state and subscribes to
-        notifications again.
-        """
-        while True:
-            try:
-                # asyncio.timeout instead of wait_for, which can swallow a cancellation on Python 3.11
-                async with asyncio.timeout(self.config.keepalive_interval):
-                    await shade.wait_until_disconnected()
-                return
-            except TimeoutError:
-                pass
-            try:
-                async with shade.lock:
-                    if shade.is_connected():
-                        await shade.keepalive()
-            except Exception as err:
-                logger.warning(f"Keepalive of {shade.name!r} failed: {err!r}")
-
-    def start_offline_timer(self, shade: ShadeClient) -> None:
-        """Report the shade offline when it is not connected again within the grace period."""
-
-        async def report_offline() -> None:
-            await asyncio.sleep(self.config.offline_grace_period)
-            self.offline_timers.pop(shade.name, None)
-            if not shade.is_connected():
-                await self.publish_availability(shade, CoverAvailability.OFFLINE)
-
-        if timer := self.offline_timers.get(shade.name):
-            timer.cancel()
-        self.offline_timers[shade.name] = self.spawn(report_offline(), name=f"offline timer {shade.name}")
+    async def first_connection(self, shade: ShadeClient) -> None:
+        """Store the manufacturer etc. and identify the shade with a beep."""
+        self.fleet.save()
+        await shade.identify()
 
     async def control_shade(self, device_name: str, command: Callable[[ShadeClient], Awaitable[None]]) -> None:
         """Run a command on a shade, connect first when the connection is lost."""
@@ -349,35 +248,11 @@ class MQTTBridge:
             logger.warning(f"Smart Shade {device_name!r} not found")
             return
         try:
-            async with shade.lock:
-                if not shade.bluetooth_enabled:
-                    logger.warning(f"Ignoring a command for {device_name!r}, its Bluetooth connection is disabled")
-                    return
-                await self.connect_shade(shade)
-                await command(shade)
+            await self.connection(shade).run_command(lambda: command(shade))
+        except ShadeDisabledError:
+            logger.warning(f"Ignoring a command for {device_name!r}, its Bluetooth connection is disabled")
         except Exception as err:
             logger.error(f"Cannot control shade {device_name!r}: {err!r}")
-
-    async def update_shades(self) -> None:
-        """Refresh the position and battery level of the connected shades, the connection tasks do the reconnects."""
-        for shade in self.fleet.shades:
-            if not shade.is_connected():
-                continue
-            try:
-                async with shade.lock:
-                    await shade.get_position()
-                    await shade.get_battery_level()
-                    await self.read_diagnostics(shade)
-            except Exception as err:
-                logger.error(f"Periodic update of {shade.name!r} failed: {err!r}")
-
-    async def read_diagnostics(self, shade: ShadeClient) -> None:
-        """Read the battery voltage and the charging input, which not every firmware may support."""
-        for read in (shade.get_battery_voltage, shade.get_charging):
-            try:
-                await read()
-            except Exception as err:
-                logger.warning(f"Cannot read {read.__name__!r} of {shade.name!r}: {err!r}")
 
     def log_status_table(self) -> None:
         """Log a table with the availability and state of the shades."""
@@ -531,11 +406,8 @@ class MQTTBridge:
             switch_config_topic(shade.name, "bluetooth_connection"), json.dumps(bluetooth_connection_discovery_message)
         )
 
-    async def run_periodically(
-        self, func: Callable[[], Awaitable[None] | None], interval: float, startup_delay: float = 0
-    ) -> None:
+    async def run_periodically(self, func: Callable[[], Awaitable[None] | None], interval: float) -> None:
         """Call a function or coroutine function every `interval` seconds."""
-        await asyncio.sleep(startup_delay)
         while True:
             try:
                 result = func()
@@ -565,12 +437,7 @@ class MQTTBridge:
         await asyncio.gather(*tasks, return_exceptions=True)
 
         for shade in self.fleet.shades:
-            await self.publish_availability(shade, CoverAvailability.OFFLINE)
-            try:
-                async with asyncio.timeout(self.config.connect_timeout):
-                    await shade.disconnect()
-            except Exception as err:
-                logger.warning(f"Cannot disconnect from {shade.name!r}: {err!r}")
+            await self.connection(shade).stop()
 
         await self.publish(BRIDGE_AVAILABILITY_TOPIC, CoverAvailability.OFFLINE)
         if self.mqtt_task:

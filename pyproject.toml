@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "soma-shades"
-version = "1.4.0"
-description = "Control Soma Smart Shades over Bluetooth LE, and bridge them to Home Assistant through MQTT"
+version = "2.0.0"
+description = "Control Soma Smart Shades over Bluetooth LE, with an MQTT bridge to Home Assistant"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -28,17 +28,20 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "aiomqtt~=2.5",
-    "bleak~=3.0",
-    "bleak-retry-connector~=4.7",
-    "click~=8.2",
-    "colorlog~=6.8",
+    "bleak>=3.0,<4",
+    "bleak-retry-connector>=4.7,<5",
     "platformdirs~=4.3",
-    "prettytable~=3.9",
 ]
 
 [project.optional-dependencies]
+bridge = [
+    "aiomqtt~=2.5",
+    "click~=8.2",
+    "colorlog~=6.8",
+    "prettytable~=3.9",
+]
 dev = [
+    "soma-shades[bridge]",
     "mypy",
     "pre-commit",
     "pytest",
@@ -53,7 +56,7 @@ Issues = "https://github.com/vanderkley/soma-shades/issues"
 Changelog = "https://github.com/vanderkley/soma-shades/blob/main/CHANGELOG.md"
 
 [project.scripts]
-soma = "soma_shades.cli:main"
+soma = "soma_shades.__main__:main"
 
 [tool.setuptools.package-data]
 soma_shades = ["py.typed"]

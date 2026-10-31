@@ -22,8 +22,8 @@ Bluetooth protocol with real shades too.
 2. Push the change to `main` and wait until the CI passes.
 3. Push a tag with the version:
    ```bash
-   git tag -a v1.1.0 -m "soma-shades 1.1.0"
-   git push origin v1.1.0
+   git tag -a v2.1.0 -m "soma-shades 2.1.0"
+   git push origin v2.1.0
    ```
 
 The [release workflow](.github/workflows/release.yml) builds the package, publishes it to PyPI through trusted
