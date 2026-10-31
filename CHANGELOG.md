@@ -4,6 +4,12 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-10-31
+
+### Changed
+- bleak 3.0 and bleak-retry-connector 4.7. Among others, this fixes an occasional `EOFError` when a connection is
+  closed, and a file handle leak when the D-Bus connection is lost.
+
 ## [1.3.0] - 2026-10-31
 
 ### Added
