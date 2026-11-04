@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "soma-shades"
-version = "2.0.0"
+version = "2.1.0"
 description = "Control Soma Smart Shades over Bluetooth LE, with an MQTT bridge to Home Assistant"
 readme = "README.md"
 license = "MIT"

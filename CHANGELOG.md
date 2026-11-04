@@ -4,6 +4,12 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-11-04
+
+### Added
+- `is_tilt`, which tells from the advertisement whether a device is a SOMA Tilt 2. A Tilt uses the same protocol as
+  the Smart Shades 2, it is closed upwards at position 0, open at 50 and closed downwards at 100.
+
 ## [2.0.0] - 2026-10-31
 
 ### Changed

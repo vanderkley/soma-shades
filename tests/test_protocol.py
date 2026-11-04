@@ -4,6 +4,7 @@ from soma_shades.ble.protocol import (
     MANUFACTURER_ID,
     ConfigCommand,
     battery_level_from_voltage,
+    is_tilt,
     is_v3_shade,
     parse_config_notification,
     parse_device_name,
@@ -11,9 +12,10 @@ from soma_shades.ble.protocol import (
 )
 
 
-def v2_manufacturer_data(name: str, version: int = 0x05) -> dict[int, bytes]:
-    """Version, unknown byte, current and target position, the name followed by "0" and padded with spaces."""
-    return {MANUFACTURER_ID: bytes([version, 0x00, 100, 100]) + f"{name}0".ljust(15).encode()}
+def v2_manufacturer_data(name: str, version: int = 0x05, battery: int = 0x4B) -> dict[int, bytes]:
+    """Version, battery level with the Tilt flag, current and target position, the name followed by "0" and padded
+    with spaces."""
+    return {MANUFACTURER_ID: bytes([version, battery, 100, 100]) + f"{name}0".ljust(15).encode()}
 
 
 @pytest.mark.parametrize(
@@ -43,6 +45,14 @@ def test_versions() -> None:
     assert is_v3_shade(v3_data)
     assert parse_version({}) is None
     assert not is_v3_shade({})
+
+
+def test_is_tilt() -> None:
+    assert not is_tilt(v2_manufacturer_data("Kitchen"))
+    assert is_tilt(v2_manufacturer_data("Kitchen", battery=0x80 | 0x4B))
+    assert not is_tilt({MANUFACTURER_ID: bytes([0x10, 0x00, 0x80])})  # V3: the second byte is the position
+    assert not is_tilt({MANUFACTURER_ID: bytes([0x05])})
+    assert not is_tilt({})
 
 
 def test_parse_config_notification() -> None:

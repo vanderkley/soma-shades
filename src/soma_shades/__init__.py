@@ -5,7 +5,7 @@ from importlib.metadata import PackageNotFoundError, version
 from soma_shades.ble.client import ShadeClient
 from soma_shades.ble.connection import ConnectionConfig, ShadeConnection
 from soma_shades.ble.fleet import ShadeFleet
-from soma_shades.ble.protocol import ADVERTISEMENT_NAME, parse_device_name
+from soma_shades.ble.protocol import ADVERTISEMENT_NAME, is_tilt, parse_device_name
 from soma_shades.exceptions import (
     InvalidValueError,
     ShadeConnectionError,
@@ -35,5 +35,6 @@ __all__ = [
     "ShadeNotFoundError",
     "SomaShadesError",
     "__version__",
+    "is_tilt",
     "parse_device_name",
 ]

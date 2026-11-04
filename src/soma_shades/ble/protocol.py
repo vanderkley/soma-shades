@@ -12,6 +12,7 @@ from soma_shades.utils import to_snake_case
 ADVERTISEMENT_NAME = "S"  # local name in the advertisement data of a V2 shade, V3 shades have no name
 MANUFACTURER_ID = 880  # Wazombi Labs
 V3_MIN_VERSION = 0x10  # the first byte of the manufacturer data is the version
+TILT_FLAG = 0x80  # bit 7 of the second byte of the manufacturer data, set by a Tilt (venetian mode)
 
 # GATT characteristics
 NAME_CHAR = uuid.UUID("00001892-b87f-490c-92cb-11ba5ea5167c")
@@ -105,11 +106,21 @@ def is_v3_shade(manufacturer_data: dict[int, bytes]) -> bool:
     return version is not None and version >= V3_MIN_VERSION
 
 
+def is_tilt(manufacturer_data: dict[int, bytes]) -> bool:
+    """Whether a V2 advertisement is of a Tilt, which uses the same protocol as a shade.
+
+    A Tilt turns the slats of a venetian blind: position 0 is closed upwards, 50 is open and 100 is closed downwards.
+    See https://github.com/ebaauw/homebridge-soma, with the protocol details from Wazombi Labs.
+    """
+    data = manufacturer_data.get(MANUFACTURER_ID, b"")
+    return len(data) > 1 and not is_v3_shade(manufacturer_data) and bool(data[1] & TILT_FLAG)
+
+
 def parse_device_name(manufacturer_data: dict[int, bytes]) -> str:
     """Extract the shade name, as configured in the Soma app, from the manufacturer data of a V2 advertisement.
 
-    The data is the version, an unknown byte, the current and target position, and the ASCII name followed by "0" and
-    padded with spaces.
+    The data is the version, the battery level with the Tilt flag, the current and target position, and the ASCII
+    name followed by "0" and padded with spaces.
     """
     name = manufacturer_data.get(MANUFACTURER_ID, b"")[4:].decode("ascii", errors="ignore").rstrip()
     return to_snake_case(name.removesuffix("0").rstrip())

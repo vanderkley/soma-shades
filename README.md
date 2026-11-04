@@ -8,7 +8,7 @@
 Control [Soma Smart Shades](https://www.somasmarthome.com/) over Bluetooth LE, without the SOMA Connect hub: a Python
 library, a command line tool, and an MQTT bridge to Home Assistant.
 
-Only the **SOMA Smart Shades 2** are supported. The Smart Shades 3 use a
+The **SOMA Smart Shades 2** and the **SOMA Tilt 2** are supported, they use the same protocol. The Smart Shades 3 use a
 [different protocol](https://github.com/rzuppur/smart-shades-documentation) and are planned for a next version.
 This project is not affiliated with Soma.
 
