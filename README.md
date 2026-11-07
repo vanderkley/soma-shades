@@ -8,18 +8,19 @@
 Control [Soma Smart Shades](https://www.somasmarthome.com/) over Bluetooth LE, without the SOMA Connect hub: a Python
 library, a command line tool, and an MQTT bridge to Home Assistant.
 
-The **SOMA Smart Shades 2** and the **SOMA Tilt 2** are supported, they use the same protocol. The Smart Shades 3 use a
-[different protocol](https://github.com/rzuppur/smart-shades-documentation) and are planned for a next version.
-This project is not affiliated with Soma.
+The **SOMA Smart Shades 2** and the **SOMA Tilt 2** are supported, they use the same protocol. The MQTT bridge and the
+command line tool show a Tilt as a shade with a position: 0 is closed upwards, 50 is open and 100 is closed downwards.
+The Smart Shades 3 use a [different protocol](https://github.com/rzuppur/smart-shades-documentation), they work with
+[Zigbee2MQTT](https://www.zigbee2mqtt.io/). This project is not affiliated with Soma.
 
 ## What do you need?
 
-| You want to                                                  | Use                                                                                                      |
-|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| Use the shades in Home Assistant, and it is in range of them | The [Home Assistant integration](https://github.com/vanderkley/soma-shades-ha)                           |
-| Use the shades in Home Assistant, but it is out of range     | The [MQTT bridge](https://github.com/vanderkley/soma-shades#mqtt-bridge) on a device close to the shades |
-| Control the shades from a terminal or a script               | The [command line tool](https://github.com/vanderkley/soma-shades#command-line)                          |
-| Build your own application                                   | The [Python library](https://github.com/vanderkley/soma-shades#python-library)                           |
+| You want to                                                  | Use                                                                                                                                                                       |
+|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Use the shades in Home Assistant, and it is in range of them | The [Home Assistant integration](https://github.com/vanderkley/soma-shades-ha)                                                                                            |
+| Use the shades in Home Assistant, but it is out of range     | The [Home Assistant integration](https://github.com/vanderkley/soma-shades-ha) with Bluetooth proxies, or the [MQTT bridge](https://github.com/vanderkley/soma-shades#mqtt-bridge) on a device close to the shades |
+| Control the shades from a terminal or a script               | The [command line tool](https://github.com/vanderkley/soma-shades#command-line)                                                                                           |
+| Build your own application                                   | The [Python library](https://github.com/vanderkley/soma-shades#python-library)                                                                                            |
 
 The integration is the simplest: it needs no broker and no separate device.
 
@@ -65,6 +66,10 @@ journalctl -u soma-bridge@$USER -f
 Set the broker with `Environment=SOMA_BROKER=...` in `sudo systemctl edit soma-bridge@$USER`.
 
 ### Home Assistant
+Start with the [Home Assistant integration](https://github.com/vanderkley/soma-shades-ha), it needs no broker and no
+bridge. Is Home Assistant out of range of the shades? Add Bluetooth proxies close to them, the integration connects
+through them. Or connect the bridge:
+
 1. Install an MQTT broker: the Docker Compose file above includes one, on Home Assistant OS use the
    [Mosquitto add-on](https://github.com/home-assistant/addons/blob/master/mosquitto/DOCS.md).
 2. Add the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) with the address of the broker.
@@ -125,9 +130,9 @@ Actions of `soma control`:
 - Read: `position`, `battery`, `battery_voltage`, `charging`, `motor_speed`, `info`
 - Other: `set_motor_speed VALUE` (0 to 100), `sync_time`, `beep`
 
-The other commands are `soma bridge` and `soma probe-sounds SHADE`. Run `soma COMMAND --help` for the options and `soma -v COMMAND` for debug logging. The options can also be set with
-the environment variables `SOMA_CACHE_FILE`, `SOMA_BROKER`, `SOMA_PORT`, `SOMA_USERNAME`, `SOMA_PASSWORD` and
-`SOMA_DISCOVER`.
+The other commands are `soma bridge` and `soma probe-sounds SHADE`. Run `soma COMMAND --help` for the options and
+`soma -v COMMAND` for debug logging. The options can also be set with the environment variables `SOMA_CACHE_FILE`,
+`SOMA_BROKER`, `SOMA_PORT`, `SOMA_USERNAME`, `SOMA_PASSWORD` and `SOMA_DISCOVER`.
 
 ## Python library
 ```bash
@@ -224,6 +229,6 @@ the checks and the release steps.
 
 ## Credits
 Thanks to [rzuppur/smart-shades-documentation](https://github.com/rzuppur/smart-shades-documentation) for the
-protocol documentation, and [andersonshatch/soma-ctrl](https://github.com/andersonshatch/soma-ctrl) for the original
-Node.js implementation.
+protocol documentation, [andersonshatch/soma-ctrl](https://github.com/andersonshatch/soma-ctrl) for the original
+Node.js implementation, and [ebaauw/homebridge-soma](https://github.com/ebaauw/homebridge-soma) for the Tilt.
 Licensed under [MIT](https://github.com/vanderkley/soma-shades/blob/main/LICENSE).
