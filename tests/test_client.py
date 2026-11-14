@@ -6,6 +6,7 @@ from soma_shades.ble.client import ShadeClient
 from soma_shades.ble.protocol import (
     BATTERY_LEVEL_CHAR,
     BATTERY_VOLTAGE_CHAR,
+    CONFIG_CHAR,
     MOTOR_CHAR,
     MOVE_PERCENT_CHAR,
     NOTIFY_CHAR,
@@ -162,3 +163,17 @@ async def test_identify_plays_a_sound(shade: ShadeClient, bluetooth: FakeBluetoo
     await shade.identify()
     await shade.identify(0x10)
     assert bluetooth.client.writes == [(NOTIFY_CHAR, b"\x01"), (NOTIFY_CHAR, b"\x10")]
+
+
+async def test_subscribe_once_per_connection(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    """A second subscription, e.g. by a second config query, fails through an ESPHome Bluetooth proxy."""
+    await shade.connect(timeout=1)
+    await shade.start_notify("config")
+    bluetooth.client.notify_handlers.clear()
+    await shade.start_notify("config")
+    assert bluetooth.client.notify_handlers == {}
+
+    await shade.disconnect()
+    await shade.connect(timeout=1)
+    await shade.start_notify("config")
+    assert CONFIG_CHAR in bluetooth.client.notify_handlers

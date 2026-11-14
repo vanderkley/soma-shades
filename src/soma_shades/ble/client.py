@@ -71,6 +71,7 @@ class ShadeClient:
         self.hardware_version = hardware_version
         self.bluetooth_enabled = bluetooth_enabled  # False leaves the shade free for e.g. the Soma app
         self.motor_speed: int | None = None
+        self._notifications: set[str] = set()  # the subscriptions of the current connection
         self.battery_level: int | None = None
         self.battery_voltage: int | None = None  # mV
         self.input_voltage: int | None = None  # mV, of the solar panel or USB charger
@@ -227,6 +228,7 @@ class ShadeClient:
             if client is not self.ble_client:
                 return  # deliberate disconnect or a stale client
             logger.warning(f"Disconnected from {self.name!r}, duration: {self.connected_duration}")
+            self._notifications.clear()
             self.connected = False
             self.last_connect_time = None
             self._disconnected.set()
@@ -264,6 +266,7 @@ class ShadeClient:
     async def _close_client(self) -> None:
         """Disconnect the current client without triggering the disconnect callback."""
         client, self.ble_client = self.ble_client, None
+        self._notifications.clear()
         if client is None:
             return
         try:
@@ -418,8 +421,12 @@ class ShadeClient:
             battery_level = self._set_battery_level(data)
             logger.info(f"Received a battery level notification for {self.name!r}: {battery_level}%")
 
+        if notification in self._notifications:
+            return  # e.g. an ESPHome Bluetooth proxy refuses a second subscription to the same characteristic
+
         handlers = {"position": _position_handler, "config": _config_handler, "battery_level": _battery_handler}
         await self._client.start_notify(NOTIFICATION_CHARS[notification], handlers[notification])
+        self._notifications.add(notification)
         logger.info(f"Subscribed for {self.name!r} on {notification!r} notifications")
 
     async def stop_notify(self, notification: Notification) -> None:
@@ -428,6 +435,7 @@ class ShadeClient:
                 f"Invalid notification {notification!r}, choose from {', '.join(NOTIFICATION_CHARS)}"
             )
         await self._client.stop_notify(NOTIFICATION_CHARS[notification])
+        self._notifications.discard(notification)
         logger.info(f"Unsubscribed for {self.name!r} from {notification!r} notifications")
 
     async def identify(self, sound: int = SoundCommand.BEEP) -> None:
