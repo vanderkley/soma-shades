@@ -4,6 +4,13 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-11-18
+
+### Fixed
+- A hanging connection attempt no longer blocks the other shades. Connecting and initializing a shade fail after
+  2 minutes, a keepalive and a command after 1 minute, and the shade is connected again. A command that hung while
+  its shade reconnected kept every shade that lost its connection unavailable, until a restart.
+
 ## [2.1.0] - 2026-11-04
 
 ### Added

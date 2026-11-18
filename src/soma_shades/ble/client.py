@@ -256,10 +256,15 @@ class ShadeClient:
 
     async def disconnect(self) -> None:
         await self._close_client()
+        self.mark_disconnected()
+        logger.info(f"Disconnected from {self.name!r}")
+
+    def mark_disconnected(self) -> None:
+        """Forget the connection, also when closing it fails, so the next attempt connects again."""
+        self.ble_client = None
         self.connected = False
         self.last_connect_time = None
         self._disconnected.set()
-        logger.info(f"Disconnected from {self.name!r}")
 
     async def _close_client(self) -> None:
         """Disconnect the current client without triggering the disconnect callback."""

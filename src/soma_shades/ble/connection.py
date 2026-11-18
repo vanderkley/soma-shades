@@ -25,6 +25,10 @@ class ConnectionConfig:
     keepalive_interval: float = 2 * 60  # the shades drop a connection 3 minutes after the last write
     update_interval: float = 15 * 60  # refresh the position, battery level and diagnostics of a connected shade
     offline_grace_period: float = 2 * 60  # only report a shade offline when reconnecting takes longer
+    # a Bluetooth operation can hang forever, e.g. when the adapter or BlueZ gets stuck; connecting and initializing
+    # a shade, a keepalive and a command fail after these timeouts, and the shade is connected again
+    setup_timeout: float = 2 * 60
+    operation_timeout: float = 60
 
 
 class ShadeConnection:
@@ -84,7 +88,12 @@ class ShadeConnection:
             if not self.shade.bluetooth_enabled:
                 raise ShadeDisabledError(f"The Bluetooth connection of {self.shade.name!r} is disabled")
             await self._connect()
-            await command()
+            try:
+                async with asyncio.timeout(self.config.operation_timeout):
+                    await command()
+            except TimeoutError:
+                await self._disconnect_after_timeout("A command")
+                raise ShadeConnectionError(f"A command to {self.shade.name!r} timed out") from None
 
     async def _maintain(self) -> None:
         backoff = self.config.reconnect_backoff_min
@@ -121,29 +130,51 @@ class ShadeConnection:
             if shade.ble_device is None:
                 raise ShadeConnectionError(f"No Bluetooth adapter sees {shade.name!r}")
 
+        if self.connect_semaphore.locked():
+            logger.debug(f"{shade.name!r} waits until another shade is connected")
         async with self.connect_semaphore:
-            await shade.connect(timeout=self.config.connect_timeout)
-
+            # a hanging connection would block the other shades, they wait for the semaphore
             try:
-                if not any([shade.manufacturer, shade.serial_number, shade.software_version]):
-                    await shade.get_info()
-                    if self.on_first_connection:
-                        await self.on_first_connection()
-
-                await shade.get_position()
-                await shade.get_battery_level()
-                await shade.start_notify("position")
-                await shade.start_notify("battery_level")
-            except Exception:
-                # without notifications the state would go stale, so start over on the next attempt
-                await shade.disconnect()
-                raise
-            await self._read_diagnostics()
+                async with asyncio.timeout(self.config.setup_timeout):
+                    await self._set_up()
+            except TimeoutError:
+                await self._disconnect_after_timeout("Connecting")
+                raise ShadeConnectionError(f"Connecting to {shade.name!r} timed out") from None
 
         if self._offline_timer:
             self._offline_timer.cancel()
             self._offline_timer = None
         await self._set_online(True)
+
+    async def _set_up(self) -> None:
+        shade = self.shade
+        await shade.connect(timeout=self.config.connect_timeout)
+
+        try:
+            if not any([shade.manufacturer, shade.serial_number, shade.software_version]):
+                await shade.get_info()
+                if self.on_first_connection:
+                    await self.on_first_connection()
+
+            await shade.get_position()
+            await shade.get_battery_level()
+            await shade.start_notify("position")
+            await shade.start_notify("battery_level")
+        except Exception:
+            # without notifications the state would go stale, so start over on the next attempt
+            await shade.disconnect()
+            raise
+        await self._read_diagnostics()
+
+    async def _disconnect_after_timeout(self, operation: str) -> None:
+        """Drop the connection after a hanging operation, the next attempt starts over."""
+        logger.warning(f"{operation} timed out, disconnecting from {self.shade.name!r}")
+        try:
+            async with asyncio.timeout(self.config.connect_timeout):
+                await self.shade.disconnect()
+        except Exception as err:
+            logger.warning(f"Cannot disconnect from {self.shade.name!r}: {err!r}")
+            self.shade.mark_disconnected()
 
     async def _keep_alive(self) -> None:
         """Wait until the shade disconnects, sending a keepalive request every interval.
@@ -165,12 +196,17 @@ class ShadeConnection:
                 async with self.shade.lock:
                     if not self.shade.is_connected():
                         continue
-                    await self.shade.keepalive()
-                    if time.monotonic() - last_update >= self.config.update_interval:
-                        last_update = time.monotonic()
-                        await self.shade.get_position()
-                        await self.shade.get_battery_level()
-                        await self._read_diagnostics()
+                    try:
+                        async with asyncio.timeout(self.config.operation_timeout):
+                            await self.shade.keepalive()
+                            if time.monotonic() - last_update >= self.config.update_interval:
+                                last_update = time.monotonic()
+                                await self.shade.get_position()
+                                await self.shade.get_battery_level()
+                                await self._read_diagnostics()
+                    except TimeoutError:
+                        await self._disconnect_after_timeout("The keepalive")
+                        return
             except Exception as err:
                 logger.warning(f"Keepalive of {self.shade.name!r} failed: {err!r}")
 

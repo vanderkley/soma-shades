@@ -28,11 +28,16 @@ class FakeBleakClient:
     """A connected BleakClient of a shade."""
 
     def __init__(
-        self, disconnected_callback: Callable[[Any], None], values: dict[uuid.UUID, bytes], missing: set[uuid.UUID]
+        self,
+        disconnected_callback: Callable[[Any], None],
+        values: dict[uuid.UUID, bytes],
+        missing: set[uuid.UUID],
+        hanging: set[uuid.UUID],
     ):
         self.disconnected_callback = disconnected_callback
         self.values = values
         self.missing = missing
+        self.hanging = hanging
         self.is_connected = True
         self.services: list[Any] = []
         self.reads: list[uuid.UUID] = []
@@ -41,12 +46,16 @@ class FakeBleakClient:
 
     async def read_gatt_char(self, char: uuid.UUID) -> bytearray:
         self.reads.append(char)
+        if char in self.hanging:
+            await asyncio.sleep(3600)
         if char in self.missing:
             raise BleakError(f"Characteristic {char} was not found")
         return bytearray(self.values.get(char, b"\x00"))
 
     async def write_gatt_char(self, char: uuid.UUID, data: bytes, response: bool = True) -> None:
         self.writes.append((char, bytes(data)))
+        if char in self.hanging:
+            await asyncio.sleep(3600)
 
     @property
     def commands(self) -> list[tuple[uuid.UUID, bytes]]:
@@ -85,6 +94,7 @@ class FakeBluetooth:
             CHARGING_CHAR: (605).to_bytes(2, "little") + (615).to_bytes(2, "little"),  # charging
         }
         self.missing: set[uuid.UUID] = set()  # characteristics the firmware does not have
+        self.hanging: set[uuid.UUID] = set()  # reads and writes of these characteristics never finish
 
     @property
     def client(self) -> FakeBleakClient:
@@ -97,7 +107,7 @@ class FakeBluetooth:
             await asyncio.sleep(3600)
         if self.fail:
             raise BleakNotFoundError(f"{name} not found")
-        client = FakeBleakClient(disconnected_callback, self.values, self.missing)
+        client = FakeBleakClient(disconnected_callback, self.values, self.missing, self.hanging)
         self.clients.append(client)
         return client
 

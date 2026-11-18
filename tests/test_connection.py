@@ -5,7 +5,7 @@ import pytest
 from bleak.backends.device import BLEDevice
 
 from soma_shades import ConnectionConfig, ShadeClient, ShadeConnection, ShadeConnectionError, ShadeDisabledError
-from soma_shades.ble.protocol import POSITION_CHAR
+from soma_shades.ble.protocol import POSITION_CHAR, TIME_CHAR
 
 from .conftest import FakeBluetooth, wait_until
 
@@ -92,3 +92,48 @@ async def test_refreshes_the_position(
 def test_ble_device_as_argument() -> None:
     device = BLEDevice("AA:BB", "S", None)
     assert ShadeClient(mac="AA:BB", name="Living Room", ble_device=device).ble_device is device
+
+
+async def test_hanging_connection_does_not_block_the_other_shades(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    config = ConnectionConfig(reconnect_backoff_min=0.05, stable_connection_time=0, setup_timeout=0.1)
+    semaphore = asyncio.Semaphore(1)
+    other = ShadeClient(mac="11:22:33:44:55:66", name="Kitchen", manufacturer="Wazombi Labs")
+    bluetooth.hanging.add(POSITION_CHAR)
+    hanging = ShadeConnection(shade, config, connect_semaphore=semaphore)
+    hanging.start()
+    await wait_until(lambda: len(bluetooth.clients) == 1)
+
+    bluetooth.hanging.clear()
+    connection = ShadeConnection(other, config, connect_semaphore=semaphore)
+    connection.start()
+    await wait_until(lambda: connection.online and hanging.online)
+
+    await connection.stop()
+    await hanging.stop()
+
+
+async def test_hanging_keepalive_reconnects(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    config = ConnectionConfig(
+        reconnect_backoff_min=0.05, stable_connection_time=0, keepalive_interval=0.05, operation_timeout=0.1
+    )
+    connection = ShadeConnection(shade, config)
+    connection.start()
+    await wait_until(lambda: connection.online)
+
+    bluetooth.hanging.add(TIME_CHAR)
+    await wait_until(lambda: len(bluetooth.clients) == 2)
+    bluetooth.hanging.clear()
+    await wait_until(lambda: shade.is_connected())
+    await connection.stop()
+
+
+async def test_hanging_command_fails(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    connection = ShadeConnection(shade, ConnectionConfig(operation_timeout=0.1))
+
+    async def hang() -> None:
+        await asyncio.sleep(3600)
+
+    with pytest.raises(ShadeConnectionError, match="timed out"):
+        await connection.run_command(hang)
+    assert not shade.is_connected()
+    await connection.stop()
