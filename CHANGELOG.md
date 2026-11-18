@@ -4,6 +4,16 @@ All notable changes are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-11-19
+
+### Added
+- The motor speed is read on every connection, it may have changed in the Soma app. A changed motor speed calls
+  `on_update`.
+
+### Fixed
+- A notification is subscribed once per connection, reading the motor speed again no longer subscribes twice.
+- Reading the motor speed waits for the answer of the shade, at most 1 second, instead of always 1 second.
+
 ## [2.1.1] - 2026-11-18
 
 ### Fixed

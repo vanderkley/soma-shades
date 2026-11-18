@@ -85,6 +85,8 @@ class ShadeClient:
         self.lock = asyncio.Lock()
         self._disconnected = asyncio.Event()
         self._disconnected.set()
+        self._notifications: set[Notification] = set()  # subscribed on the current connection
+        self._motor_speed_received = asyncio.Event()
         # called whenever the position or target position changes, e.g. to publish the cover state
         self.on_update: Callable[[], None] | None = None
 
@@ -252,6 +254,7 @@ class ShadeClient:
 
         self.connected = True
         self._disconnected.clear()
+        self._notifications.clear()
         logger.info(f"Connected to {self.name!r}")
 
     async def disconnect(self) -> None:
@@ -394,11 +397,13 @@ class ShadeClient:
         await self._client.write_gatt_char(MOVE_PERCENT_CHAR, bytes([target_value]), response=True)
 
     async def start_notify(self, notification: Notification) -> None:
-        """Subscribe to the position, config or battery level notifications of the shade."""
+        """Subscribe to the position, config or battery level notifications of the shade, once per connection."""
         if notification not in NOTIFICATION_CHARS:
             raise InvalidValueError(
                 f"Invalid notification {notification!r}, choose from {', '.join(NOTIFICATION_CHARS)}"
             )
+        if notification in self._notifications:
+            return
 
         async def _position_handler(_: BleakGATTCharacteristic, data: bytearray) -> None:
             self._position = int(data[0])
@@ -414,8 +419,12 @@ class ShadeClient:
         def _config_handler(_: BleakGATTCharacteristic, data: bytearray) -> None:
             for command, value in parse_config_notification(bytes(data)).items():
                 if command == ConfigCommand.MOTOR_SPEED and isinstance(value, int):
+                    changed = value != self.motor_speed
                     self.motor_speed = value
+                    self._motor_speed_received.set()
                     logger.info(f"Received a motor speed notification for {self.name!r}: {value}%")
+                    if changed:
+                        self._notify_update()
                 else:
                     logger.info(f"Received a {command.name} config notification for {self.name!r}: {value!r}")
 
@@ -425,6 +434,7 @@ class ShadeClient:
 
         handlers = {"position": _position_handler, "config": _config_handler, "battery_level": _battery_handler}
         await self._client.start_notify(NOTIFICATION_CHARS[notification], handlers[notification])
+        self._notifications.add(notification)
         logger.info(f"Subscribed for {self.name!r} on {notification!r} notifications")
 
     async def stop_notify(self, notification: Notification) -> None:
@@ -433,6 +443,7 @@ class ShadeClient:
                 f"Invalid notification {notification!r}, choose from {', '.join(NOTIFICATION_CHARS)}"
             )
         await self._client.stop_notify(NOTIFICATION_CHARS[notification])
+        self._notifications.discard(notification)
         logger.info(f"Unsubscribed for {self.name!r} from {notification!r} notifications")
 
     async def identify(self, sound: int = SoundCommand.BEEP) -> None:
@@ -441,11 +452,18 @@ class ShadeClient:
         await self._client.write_gatt_char(NOTIFY_CHAR, bytes([sound]), response=True)
 
     async def get_motor_speed(self) -> int | None:
+        """Read the motor speed, which the shade keeps, None when the shade does not answer."""
         await self.start_notify("config")
         logger.info(f"Querying the {self.name!r} motor speed")
+        self._motor_speed_received.clear()
         query = bytes([ConfigCommand.QUERY, 0x01, ConfigCommand.MOTOR_SPEED])
         await self._client.write_gatt_char(CONFIG_CHAR, query, response=True)
-        await asyncio.sleep(1)  # give the shade time to answer through the config notification
+        try:
+            # the shade answers through the config notification
+            async with asyncio.timeout(1):
+                await self._motor_speed_received.wait()
+        except TimeoutError:
+            logger.info(f"{self.name!r} did not answer the motor speed query")
         return self.motor_speed
 
     async def set_motor_speed(self, speed: int | str) -> None:

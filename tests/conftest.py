@@ -16,9 +16,11 @@ from soma_shades.ble.protocol import (
     BATTERY_LEVEL_CHAR,
     BATTERY_VOLTAGE_CHAR,
     CHARGING_CHAR,
+    CONFIG_CHAR,
     MOVE_PERCENT_CHAR,
     POSITION_CHAR,
     TIME_CHAR,
+    ConfigCommand,
 )
 from soma_shades.mqtt.bridge import MQTTBridge
 from soma_shades.mqtt.config import BridgeConfig
@@ -38,6 +40,7 @@ class FakeBleakClient:
         self.values = values
         self.missing = missing
         self.hanging = hanging
+        self.motor_speed: int | None = 50
         self.is_connected = True
         self.services: list[Any] = []
         self.reads: list[uuid.UUID] = []
@@ -56,11 +59,18 @@ class FakeBleakClient:
         self.writes.append((char, bytes(data)))
         if char in self.hanging:
             await asyncio.sleep(3600)
+        handler = self.notify_handlers.get(CONFIG_CHAR)
+        if char == CONFIG_CHAR and data[0] == ConfigCommand.QUERY and handler and self.motor_speed is not None:
+            handler(None, bytearray([0x00, 0x00, ConfigCommand.MOTOR_SPEED, 0x01, self.motor_speed]))
 
     @property
     def commands(self) -> list[tuple[uuid.UUID, bytes]]:
-        """The writes without the keepalive, which sets the clock."""
-        return [(char, data) for char, data in self.writes if char != TIME_CHAR]
+        """The writes without the keepalive, which sets the clock, and the motor speed queries."""
+        return [
+            (char, data)
+            for char, data in self.writes
+            if char != TIME_CHAR and not (char == CONFIG_CHAR and data[0] == ConfigCommand.QUERY)
+        ]
 
     async def start_notify(self, char: uuid.UUID, handler: Callable[..., Any]) -> None:
         self.notify_handlers[char] = handler
@@ -95,6 +105,7 @@ class FakeBluetooth:
         }
         self.missing: set[uuid.UUID] = set()  # characteristics the firmware does not have
         self.hanging: set[uuid.UUID] = set()  # reads and writes of these characteristics never finish
+        self.motor_speed: int | None = 50  # None: the shade does not answer the motor speed query
 
     @property
     def client(self) -> FakeBleakClient:
@@ -108,6 +119,7 @@ class FakeBluetooth:
         if self.fail:
             raise BleakNotFoundError(f"{name} not found")
         client = FakeBleakClient(disconnected_callback, self.values, self.missing, self.hanging)
+        client.motor_speed = self.motor_speed
         self.clients.append(client)
         return client
 

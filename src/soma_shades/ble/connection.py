@@ -165,6 +165,11 @@ class ShadeConnection:
             await shade.disconnect()
             raise
         await self._read_diagnostics()
+        try:
+            # it may have changed in the Soma app since the last connection, during a connection nothing else can
+            await shade.get_motor_speed()
+        except Exception as err:
+            logger.warning(f"Cannot read the motor speed of {shade.name!r}: {err!r}")
 
     async def _disconnect_after_timeout(self, operation: str) -> None:
         """Drop the connection after a hanging operation, the next attempt starts over."""

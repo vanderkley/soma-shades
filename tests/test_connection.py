@@ -5,7 +5,7 @@ import pytest
 from bleak.backends.device import BLEDevice
 
 from soma_shades import ConnectionConfig, ShadeClient, ShadeConnection, ShadeConnectionError, ShadeDisabledError
-from soma_shades.ble.protocol import POSITION_CHAR, TIME_CHAR
+from soma_shades.ble.protocol import CONFIG_CHAR, POSITION_CHAR, TIME_CHAR
 
 from .conftest import FakeBluetooth, wait_until
 
@@ -137,3 +137,38 @@ async def test_hanging_command_fails(shade: ShadeClient, bluetooth: FakeBluetoot
         await connection.run_command(hang)
     assert not shade.is_connected()
     await connection.stop()
+
+
+async def test_reads_the_motor_speed(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    updates: list[int | None] = []
+    shade.on_update = lambda: updates.append(shade.motor_speed)
+    connection = ShadeConnection(shade, CONFIG)
+    connection.start()
+    await wait_until(lambda: connection.online)
+
+    assert shade.motor_speed == 50
+    assert 50 in updates
+    await connection.stop()
+
+
+async def test_motor_speed_without_an_answer(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    bluetooth.motor_speed = None
+    connection = ShadeConnection(shade, CONFIG)
+    connection.start()
+    await wait_until(lambda: connection.online, timeout=3)  # after waiting 1 second for the answer
+
+    assert shade.motor_speed is None
+    await connection.stop()
+
+
+async def test_subscribes_once_per_connection(shade: ShadeClient, bluetooth: FakeBluetooth) -> None:
+    await shade.connect(timeout=1)
+    await shade.get_motor_speed()
+    await shade.get_motor_speed()
+    assert list(bluetooth.client.notify_handlers) == [CONFIG_CHAR]
+    assert shade._notifications == {"config"}
+
+    await shade.disconnect()
+    await shade.connect(timeout=1)
+    await shade.get_motor_speed()
+    assert list(bluetooth.client.notify_handlers) == [CONFIG_CHAR]  # subscribed again on the new connection

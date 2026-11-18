@@ -287,11 +287,11 @@ async def test_shades_are_initialized_one_by_one(
     monkeypatch.setattr(ShadeClient, "start_notify", logged_start_notify)
 
     await start(bridge)
-    await wait_until(lambda: len(events) == 6)
+    await wait_until(lambda: len(events) == 8)
 
-    # the second shade connects after both notifications of the first one
-    assert events[1:3] == [f"notify {events[0].split()[1]}"] * 2
-    assert events[3].startswith("connect")
+    # the second shade connects after the notifications of the first one: position, battery level and config
+    assert events[1:4] == [f"notify {events[0].split()[1]}"] * 3
+    assert events[4].startswith("connect")
 
 
 async def test_unknown_position_is_not_published(bridge: MQTTBridge, shade: ShadeClient) -> None:
